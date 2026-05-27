@@ -791,7 +791,8 @@ def build_focus_list(data):
 
 def build_summary_kpis(data):
     d   = data["dari"]["current"]
-    dp  = data["dari"]["trend"][-2]   # previous DARI session
+    dari_trend = data["dari"]["trend"]
+    dp  = dari_trend[-2] if len(dari_trend) >= 2 else dari_trend[-1]
     v   = data["vald"]["current"]
     vp  = data["vald"]["prev"]
     a   = data["arm"]["current"]
