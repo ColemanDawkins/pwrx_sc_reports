@@ -18,7 +18,7 @@ st.markdown(
 )
 st.markdown("---")
 
-tab1, tab2, tab3 = st.tabs(["Generate Report", "Upload Data", "Roster"])
+tab1, tab2,git status tab3 = st.tabs(["Generate Report", "Upload Data", "Roster"])
 
 
 # ── TAB 1: Generate Report ────────────────────────────────────────────────────
