@@ -9,7 +9,7 @@ st.set_page_config(
     layout="centered"
 )
 
-API_URL = "https://YOUR_RAILWAY_URL.up.railway.app"   # <-- replace after Railway deploy
+API_URL = "https://web-production-4f00a.up.railway.app"
 
 st.markdown(
     "<h2 style='text-align:center;color:#E8621A;margin-bottom:0;'>PWRX</h2>"
