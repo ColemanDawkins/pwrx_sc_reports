@@ -339,13 +339,18 @@ def _safe_val(val):
 
 def _link_master_uid(df: pd.DataFrame, table: str, conn) -> pd.DataFrame:
     """
-    Try to populate master_uid column by joining on the source-specific ID
-    (dari_id, armcare_id, vald_id, pushpress_id) from master_uid table.
-    If already present in the file, leave as-is.
+    Try to populate master_uid column. Two-pass approach:
+      Pass 1 — match on source-specific ID (dari_id, armcare_id, vald_id, pushpress_id)
+      Pass 2 — fall back to full name match for any rows still unlinked
+
+    If master_uid already present in file, leave as-is.
     """
     if "master_uid" in df.columns and df["master_uid"].notna().any():
         return df
 
+    cur = conn.cursor()
+
+    # ── Pass 1: ID-based match ────────────────────────────────────────────────
     id_map = {
         "dari_motion":      "dari_id",
         "armcare":          "armcare_id",
@@ -353,17 +358,44 @@ def _link_master_uid(df: pd.DataFrame, table: str, conn) -> pd.DataFrame:
         "pushpress":        "pushpress_id",
     }
     src_col = id_map.get(table)
-    if not src_col or src_col not in df.columns:
-        return df
+    if src_col and src_col in df.columns:
+        cur.execute(f"SELECT {src_col}, master_uid FROM master_uid WHERE {src_col} IS NOT NULL")
+        id_lookup = {row[0]: row[1] for row in cur.fetchall()}
+        df["master_uid"] = df[src_col].map(id_lookup)
+        linked_id = df["master_uid"].notna().sum()
+        print(f"  Pass 1 (ID match): linked {linked_id}/{len(df)} rows via {src_col}")
+    else:
+        df["master_uid"] = None
+        linked_id = 0
 
-    cur = conn.cursor()
-    cur.execute(f"SELECT {src_col}, master_uid FROM master_uid WHERE {src_col} IS NOT NULL")
-    lookup = {row[0]: row[1] for row in cur.fetchall()}
+    # ── Pass 2: name-based match for anything still unlinked ──────────────────
+    unlinked = df["master_uid"].isna().sum()
+    if unlinked > 0:
+        cur.execute("SELECT LOWER(TRIM(full_name)), master_uid FROM master_uid")
+        name_lookup = {row[0]: row[1] for row in cur.fetchall()}
+
+        # Detect which column holds the athlete name in this file
+        name_col = next(
+            (c for c in ["athlete_name", "full_name", "Name", "name",
+                         "first_name", "First Name"] if c in df.columns),
+            None
+        )
+        # For tables with separate first/last name columns, build a combined key
+        if name_col is None and "first_name" in df.columns and "last_name" in df.columns:
+            combined = (df["first_name"].fillna("") + " " + df["last_name"].fillna("")).str.strip().str.lower()
+            mask = df["master_uid"].isna()
+            df.loc[mask, "master_uid"] = combined[mask].map(name_lookup)
+        elif name_col:
+            mask = df["master_uid"].isna()
+            df.loc[mask, "master_uid"] = df.loc[mask, name_col].str.strip().str.lower().map(name_lookup)
+
+        linked_name = df["master_uid"].notna().sum() - linked_id
+        still_unlinked = df["master_uid"].isna().sum()
+        print(f"  Pass 2 (name match): linked {linked_name} more rows")
+        if still_unlinked > 0:
+            print(f"  WARNING: {still_unlinked} rows could not be linked to a master_uid — will upload without link")
+
     cur.close()
-
-    df["master_uid"] = df[src_col].map(lookup)
-    linked = df["master_uid"].notna().sum()
-    print(f"  Linked {linked}/{len(df)} rows to master_uid via {src_col}")
     return df
 
 
