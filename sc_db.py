@@ -482,7 +482,7 @@ COLUMN_ALIASES = {
     "throws":               ["Throws", "throws"],
     "bats":                 ["Bats", "bats"],
     "surgery":              ["Surgery", "surgery"],
-    "exam_time":            ["Time", "exam_time"],
+    "exam_time":            ["Time", "exam_time", "Exam Time"],
     "timezone":             ["Timezone", "timezone"],
     "exam_type":            ["Exam Type", "exam_type"],
     "armshield_eligibility":["ArmShield Eligibility", "armshield_eligibility"],
@@ -563,7 +563,7 @@ COLUMN_ALIASES = {
     "athlete_name":             ["Name", "name", "athlete_name"],
     "test_type":                ["Test Type", "test_type"],
     "test_date":                ["Date", "date", "test_date"],
-    "test_time":                ["Time", "test_time"],
+    "test_time":                ["test_time", "Test Time"],
     "bw_kg":                    ["BW [KG]", "bw_kg"],
     "reps":                     ["Reps", "reps"],
     "tags":                     ["Tags", "tags"],
@@ -803,8 +803,7 @@ def _link_master_uid(df: pd.DataFrame, table: str, conn) -> pd.DataFrame:
 
         # Detect which column holds the athlete name in this file
         name_col = next(
-            (c for c in ["athlete_name", "full_name", "Name", "name",
-                         "first_name", "First Name"] if c in df.columns),
+            (c for c in ["athlete_name", "full_name", "Name", "name"] if c in df.columns),
             None
         )
         # For tables with separate first/last name columns, build a combined key
@@ -820,7 +819,8 @@ def _link_master_uid(df: pd.DataFrame, table: str, conn) -> pd.DataFrame:
         still_unlinked = df["master_uid"].isna().sum()
         print(f"  Pass 2 (name match): linked {linked_name} more rows")
         if still_unlinked > 0:
-            print(f"  WARNING: {still_unlinked} rows could not be linked to a master_uid — will upload without link")
+            df = df[df["master_uid"].notna()].reset_index(drop=True)
+            print(f"  Dropped {still_unlinked} rows with no master_uid match — not in master table")
 
     cur.close()
     return df
