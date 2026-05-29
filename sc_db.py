@@ -85,7 +85,9 @@ CREATE TABLE IF NOT EXISTS dari_motion (
     master_uid          TEXT REFERENCES master_uid(master_uid) ON DELETE SET NULL,
     dari_id             TEXT,
     session_guid        TEXT UNIQUE,
-    athlete_name        TEXT,
+    session_type        TEXT,
+    first_name          TEXT,
+    last_name           TEXT,
     version             TEXT,
     session_ts          TIMESTAMPTZ,
     session_height      NUMERIC,
@@ -314,7 +316,7 @@ COLUMN_ALIASES = {
     "last_checkin": ["lastCheckin", "last_checkin", "LastCheckin"],
     # dari
     "session_guid": ["meta__session__session_guid", "session_guid"],
-    "athlete_name": ["name", "athlete_name", "Name"],
+    "session_type": ["name", "Name"],
     "session_ts":   ["timestamp", "meta__session__session_timestamp", "session_ts"],
     "session_height": ["meta__session__session_height", "session_height"],
     "session_weight": ["meta__session__session_weight", "session_weight"],
@@ -606,7 +608,7 @@ TABLE_COLUMNS = {
         "plan_cancel_date", "is_member", "first_checkin", "last_checkin",
     ],
     "dari_motion": [
-        "master_uid", "dari_id", "session_guid", "athlete_name", "version",
+        "master_uid", "dari_id", "session_guid", "session_type", "first_name", "last_name", "version",
         "session_ts", "session_height", "session_weight", "unit_mode",
         "score_overall", "score_function", "score_function_squat", "score_function_slr",
         "score_function_sll", "score_function_avg", "score_explosive", "score_explosive_vj",
@@ -802,11 +804,12 @@ def _link_master_uid(df: pd.DataFrame, table: str, conn) -> pd.DataFrame:
         name_lookup = {row[0]: row[1] for row in cur.fetchall()}
 
         # Detect which column holds the athlete name in this file
+        # Note: for dari_motion, 'name' is the session type — use first_name+last_name
         name_col = next(
-            (c for c in ["athlete_name", "full_name", "Name", "name"] if c in df.columns),
+            (c for c in ["full_name", "athlete_name"] if c in df.columns),
             None
         )
-        # For tables with separate first/last name columns, build a combined key
+        # For tables with separate first/last name columns (dari, armcare), build combined key
         if name_col is None and "first_name" in df.columns and "last_name" in df.columns:
             combined = (df["first_name"].fillna("") + " " + df["last_name"].fillna("")).str.strip().str.lower()
             mask = df["master_uid"].isna()
@@ -995,10 +998,37 @@ def load_athlete_data(athlete_name: str) -> dict:
 
     # ── Dari ────────────────────────────────────────────────────────────────
     cur.execute("""
-        SELECT session_ts, score_overall, score_function, score_explosive,
-               score_dysfunction, score_vulnerability,
+        SELECT session_ts,
+               score_overall, score_function, score_function_squat, score_function_slr,
+               score_function_sll, score_function_avg, score_explosive, score_explosive_vj,
+               score_explosive_vjr, score_explosive_vjl, score_explosive_cvj,
+               score_explosive_dbj, score_explosive_avg, score_dysfunction, score_vulnerability,
                focus_0_name, focus_0_score, focus_1_name, focus_1_score,
-               focus_2_name, focus_2_score
+               focus_2_name, focus_2_score,
+               anklt_vulnerability, anklt_mb, anklt_kn,
+               ankrt_vulnerability, ankrt_mb, ankrt_kn,
+               knelt_vulnerability, knelt_mb, knelt_allo, knelt_alla, knelt_kn,
+               knert_vulnerability, knert_mb, knert_allo, knert_alla, knert_kn,
+               hiplt_vulnerability, hiplt_mb, hiplt_kn,
+               hiprt_vulnerability, hiprt_mb, hiprt_kn,
+               sholt_vulnerability, sholt_mb, sholt_al,
+               short_vulnerability, short_mb, short_al,
+               spnlo_vulnerability, spnlo_mb, spnlo_al, spnlo_sw,
+               spnup_vulnerability, spnup_mb, spnup_al,
+               dp7_jump_height, dp7_grf_max, dp7_net_impulse, dp7_rfd,
+               dp9_squat_depth, dp9_right_hip_flexion, dp9_right_knee_flexion, dp9_right_ankle_flexion,
+               dp10_squat_depth, dp10_left_hip_flexion, dp10_left_knee_flexion, dp10_left_ankle_flexion,
+               dp11_jump_height, dp11_grf_max, dp11_net_impulse, dp11_rfd,
+               dp12_jump_height, dp12_grf_max, dp12_net_impulse, dp12_rfd,
+               dp15_left_shoulder_ext, dp15_right_shoulder_ext, dp15_left_shoulder_int, dp15_right_shoulder_int,
+               dp16_left_shoulder_max, dp16_right_shoulder_max, dp16_left_shoulder_min, dp16_right_shoulder_min,
+               dp19_jump_height, dp19_grf_max, dp19_net_impulse, dp19_stance_time,
+               dp45_jump_height, dp45_grf_max, dp45_net_impulse, dp45_rfd,
+               dp151_st_ln_max, dp152_st_ln_max,
+               dp156_squat_depth, dp156_pct_diff_max_l, dp156_pct_diff_max_r,
+               dp157_th_rot_e3, dp157_lum_rot_e3, dp158_th_rot_e3, dp158_lum_rot_e3,
+               dp163_rbalance_lt_xrom, dp163_rbalance_lt_yrom,
+               dp164_lbalance_lt_xrom, dp164_lbalance_lt_yrom
         FROM dari_motion
         WHERE master_uid = %s AND session_ts IS NOT NULL
         ORDER BY session_ts DESC LIMIT %s
@@ -1007,8 +1037,11 @@ def load_athlete_data(athlete_name: str) -> dict:
 
     # ── Vald ────────────────────────────────────────────────────────────────
     cur.execute("""
-        SELECT test_date, jump_height_flight_in, peak_power_w,
-               rsi_modified, eccentric_peak_force_n, bodyweight_lbs
+        SELECT test_date, test_type, bw_kg,
+               jump_height_flight_in, peak_power_w, athlete_standing_weight_kg,
+               peak_power_per_bm, rsi_modified, eccentric_peak_force_n,
+               concentric_impulse_100ms, jump_height_imp_mom_in,
+               eccentric_peak_power_per_bm, bodyweight_lbs, additional_load_kg
         FROM vald_performance
         WHERE master_uid = %s AND test_date IS NOT NULL
         ORDER BY test_date DESC LIMIT %s
@@ -1017,8 +1050,19 @@ def load_athlete_data(athlete_name: str) -> dict:
 
     # ── ArmCare ─────────────────────────────────────────────────────────────
     cur.execute("""
-        SELECT exam_date, arm_score, total_strength,
-               shoulder_balance, svr, irtarm_strength, ertarm_strength, velo
+        SELECT exam_date, arm_score, total_strength, shoulder_balance, svr, velo,
+               irtarm_strength, irtarm_rs, ertarm_strength, ertarm_rs,
+               starm_strength, starm_rs, gtarm_strength, gtarm_rs,
+               total_strength_post, post_strength_loss, total_pct_fresh,
+               irtarm_post_strength, irtarm_post_loss, irtarm_pct_fresh,
+               ertarm_post_strength, ertarm_post_loss, ertarm_pct_fresh,
+               starm_post_strength, starm_post_loss, starm_pct_fresh,
+               gtarm_post_strength, gtarm_post_loss, gtarm_pct_fresh,
+               irtarm_max, irntarm_max, ertarm_max, erntarm_max,
+               starm_max, sntarm_max, gtarm_max, gntarm_max,
+               accel_max, decel_max, total_primer_max,
+               irtarm_rom, irntarm_rom, ertarm_rom, erntarm_rom,
+               tarm_tarc, ntarm_tarc, ftarm_rom, fntarm_rom
         FROM armcare
         WHERE master_uid = %s AND exam_date IS NOT NULL
         ORDER BY exam_date DESC LIMIT %s
@@ -1147,6 +1191,12 @@ def load_athlete_data(athlete_name: str) -> dict:
             "dari":    len(dari_rows),
             "vald":    len(vald_rows),
             "armcare": len(arm_rows),
+        },
+        # Raw rows for comprehensive flag checking in generate_sc_report.py
+        "raw": {
+            "dari": [dict(r) for r in dari_rows],
+            "vald": [dict(r) for r in vald_rows],
+            "arm":  [dict(r) for r in arm_rows],
         },
     }
 
