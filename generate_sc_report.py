@@ -219,11 +219,17 @@ def chart_dari_dysfunction(data):
     x = range(len(sessions))
     vals = [r["dysfunction"] for r in rows]
 
+    # Color based on trend: improving (going down) = green, worsening (going up) = red
+    if len(vals) >= 2:
+        line_color = C["green"] if vals[-1] <= vals[0] else "#ef4444"
+    else:
+        line_color = C["amber"]
+
     fig, ax = _make_fig(4.2, 1.1)
     ax.set_facecolor("none")
 
-    ax.plot(x, vals, color=C["amber"], linewidth=2, marker="o", markersize=5)
-    ax.fill_between(x, vals, alpha=0.15, color=C["amber"])
+    ax.plot(x, vals, color=line_color, linewidth=2, marker="o", markersize=5)
+    ax.fill_between(x, vals, alpha=0.15, color=line_color)
 
     _dynamic_ylim(ax, vals, pad_pct=0.15, min_spread=2)
     ax.set_xticks(list(x))
@@ -286,19 +292,17 @@ def chart_vald_rsi(data):
 def chart_vald_power(data):
     rows = data["vald"]["trend"]
     sessions = [r["session"] for r in rows]
+    x = range(len(sessions))
     vals = [r["peak_power"] for r in rows]
-    colors = [C["blueL"]] * (len(vals) - 1) + [C["orange"]]
 
     fig, ax = _make_fig(4.2, 1.2)
     ax.set_facecolor("none")
 
-    bars = ax.bar(sessions, vals, color=colors, width=0.55, zorder=2)
-    for bar, val in zip(bars, vals):
-        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 30,
-                f"{val:,}", ha="center", va="bottom", fontsize=6.5, color=C["greyL"])
-
+    ax.plot(x, vals, color=C["blueL"], linewidth=2, marker="o", markersize=5)
+    ax.fill_between(x, vals, alpha=0.15, color=C["blueL"])
     _dynamic_ylim(ax, vals, pad_pct=0.15, min_spread=500)
-    ax.tick_params(axis="x", colors=C["grey"], labelsize=7)
+    ax.set_xticks(list(x))
+    ax.set_xticklabels(sessions, fontsize=7, color=C["grey"])
     ax.tick_params(axis="y", colors=C["grey"], labelsize=7)
     for spine in ax.spines.values():
         spine.set_visible(False)
@@ -362,6 +366,7 @@ def chart_arm_svr(data):
     fig, ax = _make_fig(3.8, 1.3)
     ax.set_facecolor("none")
     ax.plot(x, vals, color=C["amber"], linewidth=2, marker="o", markersize=4)
+    ax.fill_between(x, vals, alpha=0.15, color=C["amber"])
     _dynamic_ylim(ax, vals, pad_pct=0.15, min_spread=0.3)
     ax.set_xticks(list(x))
     ax.set_xticklabels(sessions, fontsize=6.5, color=C["grey"])
@@ -488,12 +493,18 @@ def gauge_svg(value, max_val, label, color):
     </div>"""
 
 
-def chip(current, previous):
+def chip(current, previous, invert=False):
+    """
+    invert=True for metrics where higher = worse (e.g. dysfunction score).
+    Green when improving (going the right direction), red when worsening.
+    """
     if previous == 0:
         return ""
     pct   = round((current - previous) / previous * 100, 1)
-    color = "#22c55e" if pct >= 0 else "#ef4444"
-    bg    = "rgba(34,197,94,0.18)" if pct >= 0 else "rgba(239,68,68,0.15)"
+    # For inverted metrics: up is bad (red), down is good (green)
+    good  = (pct < 0) if invert else (pct >= 0)
+    color = "#22c55e" if good else "#ef4444"
+    bg    = "rgba(34,197,94,0.18)" if good else "rgba(239,68,68,0.15)"
     arrow = "▲" if pct >= 0 else "▼"
     return (f'<span style="background:{bg};color:{color};font-size:9px;font-weight:700;'
             f'padding:1px 5px;border-radius:9px;">{arrow} {abs(pct):.1f}%</span>')
@@ -574,14 +585,24 @@ html, body {
   text-transform: uppercase; letter-spacing: 0.8px; margin: 3px 0 2px;
 }
 .pwrx-focus-item {
-  display: flex; align-items: center; gap: 8px; margin-bottom: 10px;
+  margin-bottom: 10px;
   background: rgba(255,255,255,0.04); border-radius: 6px; padding: 8px 10px;
+}
+.pwrx-focus-top {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 5px;
 }
 .pwrx-focus-num {
   width: 22px; height: 22px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
   flex-shrink: 0; font-size: 11px; font-weight: 900; color: #fff;
 }
+.pwrx-focus-desc {
+  font-size: 10px; color: #7a9bbf; line-height: 1.5;
+  padding-left: 30px; margin-top: 3px;
+}
+.pwrx-focus-trend-up   { color: #ef4444; font-weight: 700; }
+.pwrx-focus-trend-down { color: #22c55e; font-weight: 700; }
+.pwrx-focus-trend-flat { color: #9ca3af; }
 .pwrx-summary-strip {
   padding: 0 14px 14px; max-width: 1440px; margin: 0 auto;
 }
@@ -765,10 +786,22 @@ html, body {
       {{ chart_dari_dysfunction }}
       <div class="pwrx-divider"></div>
       <div class="pwrx-section-label">Focus Areas</div>
-      {% for i, area, color in dari_focus %}
-      <div class="pwrx-focus-item" style="border:1px solid {{ color }}33;">
-        <div class="pwrx-focus-num" style="background:{{ color }};">{{ i }}</div>
-        <span style="font-size:10px;color:#C5D6E8;font-weight:600;">{{ area }}</span>
+      {% for f in dari_focus %}
+      <div class="pwrx-focus-item" style="border:1px solid {{ f.color }}33;">
+        <div class="pwrx-focus-top">
+          <div class="pwrx-focus-num" style="background:{{ f.color }};">{{ f.rank }}</div>
+          <span style="font-size:10px;color:#C5D6E8;font-weight:600;">{{ f.name }}</span>
+        </div>
+        <div class="pwrx-focus-desc">
+          Flagged in <strong>{{ f.sessions_seen }} of {{ f.total_sessions }}</strong> sessions.
+          {% if f.score_trend %}
+            Score <span class="pwrx-focus-trend-{{ f.trend_dir }}">{{ f.score_trend }}</span>
+            {% if f.trend_dir == "down" %}&#8595; improving{% else %}&#8593; worsening{% endif %}
+            over tracked sessions.
+          {% else %}
+            First session flagged — no prior trend available.
+          {% endif %}
+        </div>
       </div>
       {% endfor %}
     </div>
@@ -955,9 +988,21 @@ html, body {
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_focus_list(data):
-    areas  = data["dari"]["focus_areas"]
-    colors = [C["orange"], C["amber"], C["blueL"], C["purple"], C["green"]]
-    return [(i + 1, area, colors[i % len(colors)]) for i, area in enumerate(areas)]
+    colors   = [C["orange"], C["amber"], C["blueL"], C["purple"], C["green"]]
+    enriched = data["dari"].get("focus_areas_enriched")
+    if enriched:
+        return [
+            dict(f, rank=i+1, color=colors[i % len(colors)])
+            for i, f in enumerate(enriched)
+        ]
+    # Fallback for sample/hardcoded data
+    areas = data["dari"]["focus_areas"]
+    return [
+        {"rank": i+1, "name": area, "color": colors[i % len(colors)],
+         "sessions_seen": 1, "total_sessions": 1,
+         "score_trend": None, "trend_dir": None, "latest_score": 0}
+        for i, area in enumerate(areas)
+    ]
 
 
 def build_summary_kpis(data):
@@ -1016,7 +1061,16 @@ def build_decline_flags(data):
         _check("DARI", "Athleticism",   c["athleticism"],   p["athleticism"])
         _check("DARI", "Functionality", c["functionality"], p["functionality"])
         _check("DARI", "Explosiveness", c["explosiveness"], p["explosiveness"])
-        _check("DARI", "Dysfunction",   c["dysfunction"],   p["dysfunction"])
+        # Dysfunction: flag an INCREASE of >=15% (higher = worse)
+        if p["dysfunction"] and p["dysfunction"] != 0:
+            pct = (c["dysfunction"] - p["dysfunction"]) / abs(p["dysfunction"])
+            if pct >= 0.15:
+                flags.append({
+                    "source": "DARI", "metric": "Dysfunction",
+                    "prev": f"{p['dysfunction']:.1f}",
+                    "curr": f"{c['dysfunction']:.1f}",
+                    "pct": f"+{pct*100:.1f}%",
+                })
 
     # ── VALD ──────────────────────────────────────────────────────────────────
     vald_trend = data["vald"]["trend"]

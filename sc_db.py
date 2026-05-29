@@ -997,7 +997,8 @@ def load_athlete_data(athlete_name: str) -> dict:
     cur.execute("""
         SELECT session_ts, score_overall, score_function, score_explosive,
                score_dysfunction, score_vulnerability,
-               focus_0_name, focus_1_name, focus_2_name
+               focus_0_name, focus_0_score, focus_1_name, focus_1_score,
+               focus_2_name, focus_2_score
         FROM dari_motion
         WHERE master_uid = %s AND session_ts IS NOT NULL
         ORDER BY session_ts DESC LIMIT %s
@@ -1059,11 +1060,57 @@ def load_athlete_data(athlete_name: str) -> dict:
     arm_trend  = _arm_trend(arm_rows)  if arm_rows  else [empty_arm]
 
     last_dari = dari_rows[-1] if dari_rows else {}
-    focus_areas = [f for f in [
+
+    # ── Build focus trend: per-area history across all sessions ──────────────
+    # Collect all unique focus area names seen across sessions
+    focus_history = {}  # name -> list of {session, score} in chron order
+    for r in dari_rows:
+        session_label = _fmt_label(r["session_ts"])
+        for slot in [(r.get("focus_0_name"), r.get("focus_0_score")),
+                     (r.get("focus_1_name"), r.get("focus_1_score")),
+                     (r.get("focus_2_name"), r.get("focus_2_score"))]:
+            name_val, score_val = slot
+            if name_val:
+                if name_val not in focus_history:
+                    focus_history[name_val] = []
+                focus_history[name_val].append({
+                    "session": session_label,
+                    "score":   _safe_float(score_val),
+                })
+
+    # Current session focus areas (top 3 by rank)
+    current_focus = [f for f in [
         last_dari.get("focus_0_name"),
         last_dari.get("focus_1_name"),
         last_dari.get("focus_2_name"),
     ] if f] or ["No focus areas recorded"]
+
+    # Build enriched focus list for report
+    focus_areas_enriched = []
+    for area in current_focus:
+        history = focus_history.get(area, [])
+        sessions_seen = len(history)
+        total_sessions = len(dari_rows)
+        # Score trend: compare oldest to newest appearance
+        score_trend = None
+        trend_dir   = None
+        if len(history) >= 2:
+            delta = history[-1]["score"] - history[0]["score"]
+            pct   = delta / history[0]["score"] if history[0]["score"] else 0
+            score_trend = f"{pct*100:+.1f}%"
+            trend_dir   = "up" if delta > 0 else "down"  # up = worse (higher vulnerability)
+        focus_areas_enriched.append({
+            "name":          area,
+            "sessions_seen": sessions_seen,
+            "total_sessions": total_sessions,
+            "score_trend":   score_trend,
+            "trend_dir":     trend_dir,
+            "latest_score":  round(_safe_float(last_dari.get(
+                "focus_0_score" if area == last_dari.get("focus_0_name") else
+                "focus_1_score" if area == last_dari.get("focus_1_name") else
+                "focus_2_score"
+            )), 3),
+        })
 
     return {
         "athlete_name": name,
@@ -1078,7 +1125,8 @@ def load_athlete_data(athlete_name: str) -> dict:
                 "dysfunction":   dari_trend[-1]["dysfunction"],
                 "vulnerability": _safe_float(last_dari.get("score_vulnerability")),
             },
-            "focus_areas": focus_areas,
+            "focus_areas":          current_focus,
+            "focus_areas_enriched": focus_areas_enriched,
         },
         "vald": {
             "trend":   vald_trend,
