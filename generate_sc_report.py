@@ -1028,111 +1028,64 @@ def build_summary_kpis(data):
 
 def build_decline_flags(data):
     """
-    Check ALL numeric metrics across Dari, Vald, and ArmCare for a >=10% change.
-    Uses raw DB rows for comprehensive coverage.
-    Metrics where higher = worse are flagged on increase instead of decrease.
+    Check key tracked metrics for a >=10% change from the previous session.
+    Dysfunction flags on increase (higher = worse); all others flag on decline.
     """
     THRESHOLD = 0.10
     flags = []
 
-    # Columns where HIGHER = WORSE (flag increases, not decreases)
-    INVERT = {
-        "score_dysfunction", "score_vulnerability",
-        "anklt_vulnerability", "ankrt_vulnerability",
-        "knelt_vulnerability", "knert_vulnerability",
-        "hiplt_vulnerability", "hiprt_vulnerability",
-        "sholt_vulnerability", "short_vulnerability",
-        "spnlo_vulnerability", "spnup_vulnerability",
-        "post_strength_loss", "irtarm_post_loss", "ertarm_post_loss",
-        "starm_post_loss", "gtarm_post_loss",
-    }
-
-    # Columns to skip (IDs, dates, text, counts, non-meaningful numerics)
-    SKIP = {
-        "id", "master_uid", "dari_id", "armcare_id", "vald_external_id",
-        "session_ts", "test_date", "exam_date", "uploaded_at",
-        "session_type",  # dari: holds session name not a metric
-        "first_name", "last_name", "athlete_name", "session_guid", "version",
-        "test_type", "tags", "armcare_id",
-        "bw_kg", "bodyweight_lbs", "athlete_standing_weight_kg",
-        "additional_load_kg", "reps",
-    }
-
-    def _fmt(val):
+    def _check(source, metric, curr_val, prev_val, fmt="{:.1f}", invert=False):
+        if prev_val is None or curr_val is None:
+            return
         try:
-            f = float(val)
-            if abs(f) >= 1000:  return f"{f:,.0f}"
-            if abs(f) >= 10:    return f"{f:.1f}"
-            if abs(f) >= 1:     return f"{f:.2f}"
-            return f"{f:.3f}"
-        except Exception:
-            return str(val)
+            c = float(curr_val)
+            p = float(prev_val)
+        except (TypeError, ValueError):
+            return
+        if p == 0 or c == 0:
+            return
+        pct = (c - p) / abs(p)
+        triggered = (pct >= THRESHOLD) if invert else (pct <= -THRESHOLD)
+        if triggered:
+            direction = f"+{pct*100:.1f}%" if pct > 0 else f"{pct*100:.1f}%"
+            flags.append({
+                "source": source,
+                "metric": metric,
+                "prev":   fmt.format(p),
+                "curr":   fmt.format(c),
+                "pct":    direction,
+            })
 
-    def _check_rows(source, curr_row, prev_row):
-        """Compare all numeric keys between two DB row dicts."""
-        for key, curr_val in curr_row.items():
-            if key in SKIP or curr_val is None:
-                continue
-            prev_val = prev_row.get(key)
-            if prev_val is None:
-                continue
-            try:
-                c = float(curr_val)
-                p = float(prev_val)
-            except (TypeError, ValueError):
-                continue
-            if p == 0 or c == 0:
-                continue
+    # ── DARI ──────────────────────────────────────────────────────────────────
+    dari_trend = data["dari"]["trend"]
+    if len(dari_trend) >= 2:
+        c, p = dari_trend[-1], dari_trend[-2]
+        _check("Dari", "Athleticism",   c["athleticism"],   p["athleticism"])
+        _check("Dari", "Functionality", c["functionality"], p["functionality"])
+        _check("Dari", "Explosiveness", c["explosiveness"], p["explosiveness"])
+        _check("Dari", "Dysfunction",   c["dysfunction"],   p["dysfunction"],
+               invert=True)  # higher = worse
 
-            pct = (c - p) / abs(p)
-            invert = key in INVERT
+    # ── VALD ──────────────────────────────────────────────────────────────────
+    vald_trend = data["vald"]["trend"]
+    if len(vald_trend) >= 2:
+        c, p = vald_trend[-1], vald_trend[-2]
+        _check("Vald", "Jump Height",  c["jump_height"], p["jump_height"], "{:.2f}")
+        _check("Vald", "Peak Power",   c["peak_power"],  p["peak_power"],  "{:,.0f}")
+        _check("Vald", "RSI-Modified", c["rsi_mod"],     p["rsi_mod"],     "{:.3f}")
 
-            # Flag decline (default) or increase (inverted metrics)
-            triggered = (pct >= THRESHOLD) if invert else (pct <= -THRESHOLD)
-            if triggered:
-                label = key.replace("_", " ").title()
-                direction = f"+{pct*100:.1f}%" if pct > 0 else f"{pct*100:.1f}%"
-                flags.append({
-                    "source": source,
-                    "metric": label,
-                    "prev":   _fmt(p),
-                    "curr":   _fmt(c),
-                    "pct":    direction,
-                    "invert": invert,
-                })
+    # ── ArmCare ───────────────────────────────────────────────────────────────
+    arm_trend = data["arm"]["trend"]
+    if len(arm_trend) >= 2:
+        c, p = arm_trend[-1], arm_trend[-2]
+        _check("ArmCare", "Arm Score",      c["arm_score"],      p["arm_score"])
+        _check("ArmCare", "Total Strength", c["total_strength"], p["total_strength"], "{:.1f}")
+        _check("ArmCare", "SVR",            c["svr"],            p["svr"],            "{:.2f}")
+        _check("ArmCare", "Balance",        c["balance"],        p["balance"],        "{:.2f}")
+        _check("ArmCare", "Velo",           c.get("velo", 0),    p.get("velo", 0),    "{:.1f}")
 
-    # ── Use raw DB rows if available ──────────────────────────────────────────
-    raw = data.get("raw", {})
-
-    dari_rows = raw.get("dari", [])
-    if len(dari_rows) >= 2:
-        _check_rows("Dari", dari_rows[-1], dari_rows[-2])
-
-    vald_rows = raw.get("vald", [])
-    if len(vald_rows) >= 2:
-        _check_rows("Vald", vald_rows[-1], vald_rows[-2])
-
-    arm_rows = raw.get("arm", [])
-    if len(arm_rows) >= 2:
-        _check_rows("ArmCare", arm_rows[-1], arm_rows[-2])
-
-    # ── Fallback to trend dicts if no raw data (sample/hardcoded data) ────────
-    if not raw:
-        dari_trend = data["dari"]["trend"]
-        if len(dari_trend) >= 2:
-            c, p = dari_trend[-1], dari_trend[-2]
-            _check_rows("Dari", c, p)
-        vald_trend = data["vald"]["trend"]
-        if len(vald_trend) >= 2:
-            c, p = vald_trend[-1], vald_trend[-2]
-            _check_rows("Vald", c, p)
-        arm_trend = data["arm"]["trend"]
-        if len(arm_trend) >= 2:
-            c, p = arm_trend[-1], arm_trend[-2]
-            _check_rows("ArmCare", c, p)
-
-    # Sort: inverted (worsening) first, then by absolute % change
-    flags.sort(key=lambda f: (-abs(float(f["pct"].replace("%","").replace("+","")))))
+    # Sort by absolute % change — largest first
+    flags.sort(key=lambda f: -abs(float(f["pct"].replace("%","").replace("+",""))))
 
     return flags
 
