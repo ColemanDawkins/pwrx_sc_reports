@@ -164,6 +164,21 @@ def _make_fig(w=4.2, h=1.5):
 # CHART BUILDERS
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _dynamic_ylim(ax, vals, pad_pct=0.15, min_spread=None):
+    """Set y-axis limits dynamically based on data with padding."""
+    clean = [v for v in vals if v is not None and v == v]  # filter None/NaN
+    if not clean:
+        return
+    lo, hi = min(clean), max(clean)
+    spread = hi - lo if hi != lo else (abs(hi) * 0.1 or 1.0)
+    if min_spread and spread < min_spread:
+        mid = (lo + hi) / 2
+        lo, hi = mid - min_spread/2, mid + min_spread/2
+        spread = min_spread
+    pad = spread * pad_pct
+    ax.set_ylim(lo - pad, hi + pad)
+
+
 def chart_dari_trend(data):
     rows = data["dari"]["trend"]
     sessions = [r["session"] for r in rows]
@@ -181,7 +196,8 @@ def chart_dari_trend(data):
         vals = [r[key] for r in rows]
         ax.plot(x, vals, color=color, linewidth=2, marker="o", markersize=4, label=label)
 
-    ax.set_ylim(65, 110)
+    all_vals = [r[k] for r in rows for k in ["athleticism","functionality","explosiveness"]]
+    _dynamic_ylim(ax, all_vals, pad_pct=0.12, min_spread=10)
     ax.set_xticks(list(x))
     ax.set_xticklabels(sessions, fontsize=7, color=C["grey"])
     ax.tick_params(axis="y", colors=C["grey"], labelsize=7)
@@ -209,7 +225,7 @@ def chart_dari_dysfunction(data):
     ax.plot(x, vals, color=C["amber"], linewidth=2, marker="o", markersize=5)
     ax.fill_between(x, vals, alpha=0.15, color=C["amber"])
 
-    ax.set_ylim(0, 10)
+    _dynamic_ylim(ax, vals, pad_pct=0.15, min_spread=2)
     ax.set_xticks(list(x))
     ax.set_xticklabels(sessions, fontsize=7, color=C["grey"])
     ax.tick_params(axis="y", colors=C["grey"], labelsize=7)
@@ -233,7 +249,7 @@ def chart_vald_jump_height(data):
     ax.set_facecolor("none")
     ax.plot(x, vals, color=C["purple"], linewidth=2, marker="o", markersize=5)
     ax.fill_between(x, vals, alpha=0.15, color=C["purple"])
-    ax.set_ylim(18, 22)
+    _dynamic_ylim(ax, vals, pad_pct=0.15, min_spread=2)
     ax.set_xticks(list(x))
     ax.set_xticklabels(sessions, fontsize=7, color=C["grey"])
     ax.tick_params(axis="y", colors=C["grey"], labelsize=7)
@@ -255,7 +271,7 @@ def chart_vald_rsi(data):
     ax.set_facecolor("none")
     ax.plot(x, vals, color=C["green"], linewidth=2, marker="o", markersize=5)
     ax.fill_between(x, vals, alpha=0.15, color=C["green"])
-    ax.set_ylim(0.60, 0.85)
+    _dynamic_ylim(ax, vals, pad_pct=0.15, min_spread=0.1)
     ax.set_xticks(list(x))
     ax.set_xticklabels(sessions, fontsize=7, color=C["grey"])
     ax.tick_params(axis="y", colors=C["grey"], labelsize=7)
@@ -281,7 +297,7 @@ def chart_vald_power(data):
         ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 30,
                 f"{val:,}", ha="center", va="bottom", fontsize=6.5, color=C["greyL"])
 
-    ax.set_ylim(5200, 6300)
+    _dynamic_ylim(ax, vals, pad_pct=0.15, min_spread=500)
     ax.tick_params(axis="x", colors=C["grey"], labelsize=7)
     ax.tick_params(axis="y", colors=C["grey"], labelsize=7)
     for spine in ax.spines.values():
@@ -303,7 +319,7 @@ def chart_arm_score(data):
     ax.set_facecolor("none")
     ax.plot(x, vals, color=C["orange"], linewidth=2, marker="o", markersize=5)
     ax.fill_between(x, vals, alpha=0.2, color=C["orange"])
-    ax.set_ylim(68, 115)
+    _dynamic_ylim(ax, vals, pad_pct=0.12, min_spread=10)
     ax.set_xticks(list(x))
     ax.set_xticklabels(sessions, fontsize=7, color=C["grey"])
     ax.tick_params(axis="y", colors=C["grey"], labelsize=7)
@@ -325,7 +341,7 @@ def chart_arm_strength(data):
     ax.set_facecolor("none")
     ax.plot(x, vals, color=C["blueL"], linewidth=2, marker="o", markersize=4)
     ax.fill_between(x, vals, alpha=0.18, color=C["blueL"])
-    ax.set_ylim(140, 230)
+    _dynamic_ylim(ax, vals, pad_pct=0.12, min_spread=20)
     ax.set_xticks(list(x))
     ax.set_xticklabels(sessions, fontsize=6.5, color=C["grey"])
     ax.tick_params(axis="y", colors=C["grey"], labelsize=7)
@@ -346,7 +362,7 @@ def chart_arm_svr(data):
     fig, ax = _make_fig(3.8, 1.3)
     ax.set_facecolor("none")
     ax.plot(x, vals, color=C["amber"], linewidth=2, marker="o", markersize=4)
-    ax.set_ylim(1.5, 2.5)
+    _dynamic_ylim(ax, vals, pad_pct=0.15, min_spread=0.3)
     ax.set_xticks(list(x))
     ax.set_xticklabels(sessions, fontsize=6.5, color=C["grey"])
     ax.tick_params(axis="y", colors=C["grey"], labelsize=7)
@@ -369,7 +385,7 @@ def chart_arm_balance(data):
     ax.plot(x, vals, color=C["green"], linewidth=2, marker="o", markersize=5)
     ax.fill_between(x, vals, alpha=0.15, color=C["green"])
     ax.axhline(1.0, color=C["greyL"], linewidth=0.8, linestyle="--", alpha=0.4)
-    ax.set_ylim(0.80, 1.15)
+    _dynamic_ylim(ax, vals + [1.0], pad_pct=0.15, min_spread=0.15)
     ax.set_xticks(list(x))
     ax.set_xticklabels(sessions, fontsize=7, color=C["grey"])
     ax.tick_params(axis="y", colors=C["grey"], labelsize=7)
@@ -582,6 +598,132 @@ html, body {
   text-align: center; padding-bottom: 16px;
   color: rgba(255,255,255,0.15); font-size: 9px; letter-spacing: 1.5px;
 }
+
+/* ── MOBILE RESPONSIVE ── */
+@media (max-width: 768px) {
+  .pwrx-grid {
+    grid-template-columns: 1fr !important;
+  }
+  .pwrx-summary-grid {
+    grid-template-columns: repeat(4, 1fr) !important;
+  }
+  .pwrx-header {
+    padding: 0 14px;
+    height: auto;
+    flex-direction: column;
+    text-align: center;
+    padding: 12px 14px;
+    gap: 4px;
+  }
+  .pwrx-header > div:first-child,
+  .pwrx-header > div:last-child {
+    width: auto !important;
+  }
+  .pwrx-athlete-name { font-size: 20px; letter-spacing: 2px; }
+}
+@media (max-width: 480px) {
+  .pwrx-summary-grid {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+}
+
+/* ── DECLINE FLAGS ── */
+.pwrx-flags {
+  margin: 0 14px 10px;
+  max-width: 1440px;
+  margin-left: auto;
+  margin-right: auto;
+  padding: 0 14px 10px;
+}
+.pwrx-flag-panel {
+  background: rgba(239,68,68,0.08);
+  border: 1px solid rgba(239,68,68,0.35);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.pwrx-flag-header {
+  background: rgba(239,68,68,0.75);
+  padding: 6px 16px;
+  font-family: 'Barlow Condensed', Impact, sans-serif;
+  font-size: 13px; font-weight: 700;
+  letter-spacing: 2.5px; text-transform: uppercase; color: #fff;
+  display: flex; align-items: center; gap: 8px;
+}
+.pwrx-flag-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 8px;
+  padding: 12px;
+}
+.pwrx-flag-item {
+  background: rgba(239,68,68,0.07);
+  border: 1px solid rgba(239,68,68,0.2);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+.pwrx-flag-source {
+  font-size: 9px; color: #ef4444;
+  text-transform: uppercase; letter-spacing: 1px; margin-bottom: 2px;
+}
+.pwrx-flag-metric {
+  font-size: 11px; font-weight: 600; color: #fff; margin-bottom: 4px;
+}
+.pwrx-flag-values {
+  display: flex; align-items: center; gap: 6px;
+}
+.pwrx-flag-prev { font-size: 12px; color: #9ca3af; font-family: monospace; }
+.pwrx-flag-arrow { font-size: 14px; color: #ef4444; }
+.pwrx-flag-curr { font-size: 14px; font-weight: 900; color: #ef4444; font-family: monospace; }
+.pwrx-flag-pct {
+  font-size: 10px; color: #ef4444; font-weight: 700;
+  background: rgba(239,68,68,0.15); border-radius: 4px; padding: 1px 5px;
+}
+.pwrx-no-flags {
+  padding: 12px 16px;
+  font-size: 12px; color: #22c55e;
+  display: flex; align-items: center; gap: 8px;
+}
+
+/* ── MOBILE RESPONSIVE ── */
+@media (max-width: 768px) {
+  .pwrx-grid {
+    grid-template-columns: 1fr !important;
+  }
+  .pwrx-summary-grid {
+    grid-template-columns: repeat(4, 1fr) !important;
+  }
+  .pwrx-header {
+    height: auto;
+    flex-direction: column;
+    text-align: center;
+    padding: 12px 14px;
+    gap: 4px;
+  }
+  .pwrx-header > div:first-child,
+  .pwrx-header > div:last-child {
+    width: auto !important;
+  }
+  .pwrx-athlete-name { font-size: 20px; letter-spacing: 2px; }
+}
+@media (max-width: 480px) {
+  .pwrx-summary-grid {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+}
+/* ── DECLINE FLAGS ── */
+.pwrx-flags { padding: 0 14px 10px; max-width: 1440px; margin: 0 auto; }
+.pwrx-flag-panel { background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.35); border-radius: 8px; overflow: hidden; }
+.pwrx-flag-header { background: rgba(239,68,68,0.75); padding: 6px 16px; font-family: 'Barlow Condensed', Impact, sans-serif; font-size: 13px; font-weight: 700; letter-spacing: 2.5px; text-transform: uppercase; color: #fff; display: flex; align-items: center; gap: 8px; }
+.pwrx-flag-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; padding: 12px; }
+.pwrx-flag-item { background: rgba(239,68,68,0.07); border: 1px solid rgba(239,68,68,0.2); border-radius: 6px; padding: 8px 10px; }
+.pwrx-flag-source { font-size: 9px; color: #ef4444; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 2px; }
+.pwrx-flag-metric { font-size: 11px; font-weight: 600; color: #fff; margin-bottom: 4px; }
+.pwrx-flag-values { display: flex; align-items: center; gap: 6px; }
+.pwrx-flag-prev { font-size: 12px; color: #9ca3af; font-family: monospace; }
+.pwrx-flag-arrow { font-size: 14px; color: #ef4444; }
+.pwrx-flag-curr { font-size: 14px; font-weight: 900; color: #ef4444; font-family: monospace; }
+.pwrx-flag-pct { font-size: 10px; color: #ef4444; font-weight: 700; background: rgba(239,68,68,0.15); border-radius: 4px; padding: 1px 5px; }
+.pwrx-no-flags { padding: 12px 16px; font-size: 12px; color: #22c55e; display: flex; align-items: center; gap: 8px; }
 </style>
 </head>
 <body>
@@ -752,6 +894,35 @@ html, body {
 
 </div><!-- /pwrx-grid -->
 
+<!-- DECLINE FLAGS -->
+<div class="pwrx-flags">
+  <div class="pwrx-flag-panel">
+    <div class="pwrx-flag-header">
+      &#9888; Performance Flags — &ge;15% Decline from Previous Session
+    </div>
+    {% if decline_flags %}
+    <div class="pwrx-flag-grid">
+      {% for f in decline_flags %}
+      <div class="pwrx-flag-item">
+        <div class="pwrx-flag-source">{{ f.source }}</div>
+        <div class="pwrx-flag-metric">{{ f.metric }}</div>
+        <div class="pwrx-flag-values">
+          <span class="pwrx-flag-prev">{{ f.prev }}</span>
+          <span class="pwrx-flag-arrow">&#8594;</span>
+          <span class="pwrx-flag-curr">{{ f.curr }}</span>
+          <span class="pwrx-flag-pct">{{ f.pct }}</span>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="pwrx-no-flags">
+      &#10003; No significant declines detected across tracked metrics.
+    </div>
+    {% endif %}
+  </div>
+</div>
+
 <!-- CROSS-MODULE SUMMARY BAR -->
 <div class="pwrx-summary-strip">
   <div class="pwrx-panel">
@@ -810,6 +981,64 @@ def build_summary_kpis(data):
     ]
 
 
+def build_decline_flags(data):
+    """
+    Check every tracked metric for a >=15% decline from session N-1 to session N.
+    Returns list of dicts: {source, metric, prev, curr, pct_change}
+    """
+    THRESHOLD = -0.15
+    flags = []
+
+    def _check(source, metric, curr_val, prev_val, fmt="{:.1f}"):
+        if prev_val is None or curr_val is None:
+            return
+        try:
+            prev_val = float(prev_val)
+            curr_val = float(curr_val)
+        except (TypeError, ValueError):
+            return
+        if prev_val == 0:
+            return
+        pct = (curr_val - prev_val) / abs(prev_val)
+        if pct <= THRESHOLD:
+            flags.append({
+                "source":  source,
+                "metric":  metric,
+                "prev":    fmt.format(prev_val),
+                "curr":    fmt.format(curr_val),
+                "pct":     f"{pct*100:.1f}%",
+            })
+
+    # ── DARI ──────────────────────────────────────────────────────────────────
+    dari_trend = data["dari"]["trend"]
+    if len(dari_trend) >= 2:
+        c, p = dari_trend[-1], dari_trend[-2]
+        _check("DARI", "Athleticism",   c["athleticism"],   p["athleticism"])
+        _check("DARI", "Functionality", c["functionality"], p["functionality"])
+        _check("DARI", "Explosiveness", c["explosiveness"], p["explosiveness"])
+        _check("DARI", "Dysfunction",   c["dysfunction"],   p["dysfunction"])
+
+    # ── VALD ──────────────────────────────────────────────────────────────────
+    vald_trend = data["vald"]["trend"]
+    if len(vald_trend) >= 2:
+        c, p = vald_trend[-1], vald_trend[-2]
+        _check("VALD", "Jump Height",  c["jump_height"], p["jump_height"], "{:.2f}")
+        _check("VALD", "Peak Power",   c["peak_power"],  p["peak_power"],  "{:,.0f}")
+        _check("VALD", "RSI-Modified", c["rsi_mod"],     p["rsi_mod"],     "{:.3f}")
+
+    # ── ArmCare ───────────────────────────────────────────────────────────────
+    arm_trend = data["arm"]["trend"]
+    if len(arm_trend) >= 2:
+        c, p = arm_trend[-1], arm_trend[-2]
+        _check("ArmCare", "Arm Score",       c["arm_score"],      p["arm_score"])
+        _check("ArmCare", "Total Strength",  c["total_strength"], p["total_strength"], "{:.1f}")
+        _check("ArmCare", "SVR",             c["svr"],            p["svr"],            "{:.2f}")
+        _check("ArmCare", "Balance",         c["balance"],        p["balance"],        "{:.2f}")
+
+    return flags
+
+
+
 def render_report(data: dict, out_path: str):
     env = Environment(loader=BaseLoader())
     env.globals["C"] = type("C", (), C)()
@@ -843,6 +1072,8 @@ def render_report(data: dict, out_path: str):
         chip_arm_svr     =chip(arm_c["svr"],             arm_p["svr"]),
         # focus list
         dari_focus=build_focus_list(data),
+        # decline flags
+        decline_flags=build_decline_flags(data),
         # charts (matplotlib base64 PNGs)
         chart_dari_trend       =chart_dari_trend(data),
         chart_dari_dysfunction =chart_dari_dysfunction(data),
