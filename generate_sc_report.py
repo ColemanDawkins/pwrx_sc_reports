@@ -931,7 +931,7 @@ html, body {
 <div class="pwrx-flags">
   <div class="pwrx-flag-panel">
     <div class="pwrx-flag-header">
-      &#9888; Performance Flags — &ge;15% Decline from Previous Session
+      &#9888; Performance Flags — &ge;10% Decline from Previous Session
     </div>
     {% if decline_flags %}
     <div class="pwrx-flag-grid">
@@ -1031,7 +1031,7 @@ def build_decline_flags(data):
     Check every tracked metric for a >=15% decline from session N-1 to session N.
     Returns list of dicts: {source, metric, prev, curr, pct_change}
     """
-    THRESHOLD = -0.15
+    THRESHOLD = -0.10
     flags = []
 
     def _check(source, metric, curr_val, prev_val, fmt="{:.1f}"):
@@ -1064,7 +1064,7 @@ def build_decline_flags(data):
         # Dysfunction: flag an INCREASE of >=15% (higher = worse)
         if p["dysfunction"] and p["dysfunction"] != 0:
             pct = (c["dysfunction"] - p["dysfunction"]) / abs(p["dysfunction"])
-            if pct >= 0.15:
+            if pct >= 0.10:
                 flags.append({
                     "source": "DARI", "metric": "Dysfunction",
                     "prev": f"{p['dysfunction']:.1f}",
