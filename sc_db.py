@@ -1419,7 +1419,9 @@ def load_athlete_data(athlete_name: str) -> dict:
                focus_0_name, focus_0_score, focus_1_name, focus_1_score,
                focus_2_name, focus_2_score
         FROM dari_motion
-        WHERE master_uid = %s AND session_ts IS NOT NULL
+        WHERE master_uid = %s
+          AND session_ts IS NOT NULL
+          AND score_overall IS NOT NULL
         ORDER BY session_ts DESC LIMIT %s
     """, (uid, MAX_SESSIONS))
     dari_rows = list(reversed(cur.fetchall()))
@@ -1429,7 +1431,10 @@ def load_athlete_data(athlete_name: str) -> dict:
         SELECT test_date, jump_height_flight_in, peak_power_w,
                rsi_modified, eccentric_peak_force_n, bodyweight_lbs
         FROM vald_performance
-        WHERE master_uid = %s AND test_date IS NOT NULL
+        WHERE master_uid = %s
+          AND test_date IS NOT NULL
+          AND jump_height_flight_in IS NOT NULL
+          AND peak_power_w IS NOT NULL
         ORDER BY test_date DESC LIMIT %s
     """, (uid, MAX_SESSIONS))
     vald_rows = list(reversed(cur.fetchall()))
@@ -1439,7 +1444,10 @@ def load_athlete_data(athlete_name: str) -> dict:
         SELECT exam_date, arm_score, total_strength,
                shoulder_balance, svr, irtarm_strength, ertarm_strength, velo
         FROM armcare
-        WHERE master_uid = %s AND exam_date IS NOT NULL
+        WHERE master_uid = %s
+          AND exam_date IS NOT NULL
+          AND arm_score IS NOT NULL
+          AND total_strength IS NOT NULL
         ORDER BY exam_date DESC LIMIT %s
     """, (uid, MAX_SESSIONS))
     arm_rows = list(reversed(cur.fetchall()))
