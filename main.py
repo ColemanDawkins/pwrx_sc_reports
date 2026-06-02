@@ -3,15 +3,16 @@ main.py
 --------------------------------------------------------------------------------
 PWRX Strength & Conditioning -- FastAPI Backend
 
-Mirrors the structure of pitchingwrx-reports/main.py.
-Deploys to Railway via Procfile: web: uvicorn main:app --host 0.0.0.0 --port $PORT
-
 Endpoints:
     GET  /health
     GET  /roster
     GET  /athlete_sessions?athlete=name
-    POST /ingest          -- upload CSV/XLSX for any data source
-    POST /generate_report -- athlete name -> HTML report (streamed)
+    GET  /athletes/search?q=name
+    POST /athletes/create
+    POST /athletes/create_from_import
+    POST /backfill
+    POST /ingest
+    POST /generate_report
 """
 
 import os
@@ -19,10 +20,11 @@ import io
 import tempfile
 import traceback
 
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, UploadFile, File, Form, Query
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-import pandas as pd
+from pydantic import BaseModel
+from typing import Optional
 
 app = FastAPI(title="PWRX S&C Reports API", version="1.0.0")
 
@@ -34,6 +36,23 @@ app.add_middleware(
 )
 
 VALID_TABLES = ["master_uid", "pushpress", "dari_motion", "armcare", "vald_performance"]
+
+
+# ── Schemas ───────────────────────────────────────────────────────────────────
+
+class CreateAthleteRequest(BaseModel):
+    first_name:   str
+    last_name:    str
+    dari_id:      Optional[str] = None
+    armcare_id:   Optional[str] = None
+    vald_id:      Optional[str] = None
+    pushpress_id: Optional[str] = None
+
+
+class CreateFromImportRequest(BaseModel):
+    table:      str
+    first_name: str
+    last_name:  str
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -49,22 +68,23 @@ def health():
 def roster():
     """Return all athletes with session counts per data source."""
     try:
-        from sc_db import get_roster
-        rows = get_roster()
-        result = []
+        from sc_db import get_roster, get_unlinked_counts
+        rows    = get_roster()
+        unlinked = get_unlinked_counts()
+        result  = []
         for r in rows:
             result.append({
                 "master_uid":        str(r["master_uid"]),
                 "full_name":         str(r["full_name"]),
-                "dari_sessions":     int(r["dari_sessions"]   or 0),
-                "vald_sessions":     int(r["vald_sessions"]   or 0),
+                "dari_sessions":     int(r["dari_sessions"]    or 0),
+                "vald_sessions":     int(r["vald_sessions"]    or 0),
                 "armcare_sessions":  int(r["armcare_sessions"] or 0),
                 "pushpress_records": int(r["pushpress_records"] or 0),
-                "last_dari":         str(r["last_dari"])   if r["last_dari"]   else None,
-                "last_vald":         str(r["last_vald"])   if r["last_vald"]   else None,
+                "last_dari":         str(r["last_dari"])    if r["last_dari"]    else None,
+                "last_vald":         str(r["last_vald"])    if r["last_vald"]    else None,
                 "last_armcare":      str(r["last_armcare"]) if r["last_armcare"] else None,
             })
-        return {"roster": result}
+        return {"roster": result, "unlinked_counts": unlinked}
     except Exception as exc:
         traceback.print_exc()
         return JSONResponse({"error": str(exc)}, status_code=500)
@@ -92,22 +112,99 @@ def athlete_sessions(athlete: str):
 
 # ─────────────────────────────────────────────────────────────────────────────
 
+@app.get("/athletes/search")
+def athlete_search(q: str = Query(..., min_length=2)):
+    """Search athletes by partial name. Returns list of matches."""
+    try:
+        from sc_db import search_athletes
+        results = search_athletes(q)
+        return {"results": results}
+    except Exception as exc:
+        traceback.print_exc()
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.post("/athletes/create")
+def athlete_create(req: CreateAthleteRequest):
+    """
+    Create a new athlete in master_uid with an auto-generated PWRX ID.
+    Returns created record or duplicate warning.
+    """
+    try:
+        from sc_db import create_athlete
+        result = create_athlete(
+            first_name=req.first_name,
+            last_name=req.last_name,
+            dari_id=req.dari_id,
+            armcare_id=req.armcare_id,
+            vald_id=req.vald_id,
+            pushpress_id=req.pushpress_id,
+        )
+        if result["status"] == "duplicate":
+            return JSONResponse(result, status_code=409)
+        return result
+    except Exception as exc:
+        traceback.print_exc()
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.post("/athletes/create_from_import")
+def athlete_create_from_import(req: CreateFromImportRequest):
+    """
+    Create a master_uid record for an athlete found during a file import,
+    then immediately back-fill their rows in the source table.
+    """
+    try:
+        from sc_db import create_athlete, backfill_links
+        result = create_athlete(req.first_name, req.last_name)
+        if result["status"] == "duplicate":
+            return JSONResponse(result, status_code=409)
+        # Back-fill this athlete's rows in the source table
+        bf = backfill_links(table=req.table)
+        result["rows_linked"] = bf.get(req.table, 0)
+        return result
+    except Exception as exc:
+        traceback.print_exc()
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.post("/backfill")
+def backfill(table: Optional[str] = None):
+    """
+    Sweep source tables and link rows to master_uid by name matching.
+    Pass ?table=dari_motion to run on one table only.
+    """
+    try:
+        from sc_db import backfill_links
+        results = backfill_links(table=table)
+        total   = sum(results.values())
+        return {"status": "ok", "linked": results, "total_linked": total}
+    except Exception as exc:
+        traceback.print_exc()
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+
 @app.post("/ingest")
 async def ingest(
     file:  UploadFile = File(...),
     table: str        = Form(...),
 ):
-    """
-    Upload a CSV or XLSX file and ingest it into the specified table.
-    table must be one of: master_uid | pushpress | dari_motion | armcare | vald_performance
-    """
+    """Upload a CSV or XLSX file and ingest it into the specified table."""
     if table not in VALID_TABLES:
         return JSONResponse(
             {"error": f"Invalid table '{table}'. Must be one of: {VALID_TABLES}"},
             status_code=400
         )
 
-    suffix = ".xlsx" if file.filename.endswith((".xlsx", ".xls")) else ".csv"
+    suffix   = ".xlsx" if file.filename.endswith((".xlsx", ".xls")) else ".csv"
     tmp_path = None
 
     try:
@@ -116,16 +213,18 @@ async def ingest(
             tmp.write(contents)
             tmp_path = tmp.name
 
-        from sc_db import ingest_file
-        result = ingest_file(tmp_path, table, verbose=False)
+        from sc_db import ingest_file, get_unlinked_names
+        result       = ingest_file(tmp_path, table, verbose=False)
+        unlinked     = get_unlinked_names(table) if table != "master_uid" else []
 
         return {
-            "status":   "success",
-            "table":    table,
-            "inserted": int(result["inserted"]),
-            "skipped":  int(result["skipped"]),
-            "flagged":  int(result["flagged"]),
-            "warnings": result["warnings"],
+            "status":          "success",
+            "table":           table,
+            "inserted":        int(result["inserted"]),
+            "skipped":         int(result["skipped"]),
+            "flagged":         int(result["flagged"]),
+            "warnings":        result["warnings"],
+            "unlinked_names":  unlinked,
         }
 
     except Exception as exc:
@@ -141,21 +240,16 @@ async def ingest(
 
 @app.post("/generate_report")
 async def generate_report(athlete_name: str = Form(...)):
-    """
-    Generate a self-contained HTML S&C report for the given athlete.
-    Returns the HTML file as a download (same pattern as /generate in pitching app).
-    """
+    """Generate a self-contained HTML S&C report for the given athlete."""
     tmp_path = None
     try:
         from sc_db import load_athlete_data
         from generate_sc_report import render_report
 
-        data = load_athlete_data(athlete_name)
-
-        out = tempfile.NamedTemporaryFile(delete=False, suffix=".html")
+        data     = load_athlete_data(athlete_name)
+        out      = tempfile.NamedTemporaryFile(delete=False, suffix=".html")
         out.close()
         tmp_path = out.name
-
         render_report(data, tmp_path)
 
         with open(tmp_path, "rb") as f:

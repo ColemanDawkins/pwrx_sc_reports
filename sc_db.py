@@ -919,6 +919,19 @@ def ingest_file(path: str, table: str, verbose: bool = True) -> dict:
         for w in warnings:
             print(f"  {w}")
 
+    # Auto backfill: link any newly inserted rows to master_uid by name
+    if table != "master_uid" and inserted > 0:
+        try:
+            bf = backfill_links(table=table)
+            linked = bf.get(table, 0)
+            if linked > 0:
+                warnings.append(f"Auto-linked {linked} rows to master_uid by name match")
+                if verbose:
+                    print(f"  Auto-linked {linked} rows to master_uid")
+        except Exception as bf_err:
+            if verbose:
+                print(f"  Backfill warning: {bf_err}")
+
     return {"inserted": inserted, "skipped": skipped, "flagged": flagged, "warnings": warnings}
 
 
@@ -1152,6 +1165,185 @@ def load_athlete_data(athlete_name: str) -> dict:
             "armcare": len(arm_rows),
         },
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ATHLETE MANAGEMENT  (PWRX ID generation, creation, back-fill linking)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def generate_pwrx_id(cur) -> str:
+    """
+    Generate the next PWRX ID by finding the highest existing one and incrementing.
+    Must be called inside an open transaction with a cursor.
+    """
+    cur.execute("SELECT master_uid FROM master_uid WHERE master_uid LIKE 'PWRX%' ORDER BY master_uid DESC LIMIT 1")
+    row = cur.fetchone()
+    if row:
+        try:
+            num = int(row[0].replace("PWRX", "")) + 1
+        except ValueError:
+            num = 1
+    else:
+        num = 1
+    return f"PWRX{num:06d}"
+
+
+def search_athletes(query: str) -> list[dict]:
+    """Search master_uid by partial name match. Returns list of matches."""
+    conn = get_conn()
+    cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("""
+        SELECT master_uid, full_name, first_name, last_name,
+               dari_id, armcare_id, vald_id, pushpress_id
+        FROM master_uid
+        WHERE full_name ILIKE %s
+           OR (first_name || ' ' || last_name) ILIKE %s
+        ORDER BY full_name LIMIT 20
+    """, (f"%{query}%", f"%{query}%"))
+    results = [dict(r) for r in cur.fetchall()]
+    cur.close()
+    conn.close()
+    return results
+
+
+def create_athlete(first_name: str, last_name: str,
+                   dari_id: str = None, armcare_id: str = None,
+                   vald_id: str = None, pushpress_id: str = None) -> dict:
+    """
+    Create a new athlete in master_uid with an auto-generated PWRX ID.
+
+    Returns:
+        {"status": "created", "master_uid": "PWRX000516", "full_name": "..."}
+        {"status": "duplicate", "existing_uid": "PWRX000123", "existing_name": "..."}
+    """
+    full_name = f"{first_name.strip()} {last_name.strip()}"
+    conn = get_conn()
+    cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    # Duplicate check
+    cur.execute("""
+        SELECT master_uid, full_name FROM master_uid
+        WHERE LOWER(TRIM(full_name)) = LOWER(TRIM(%s))
+        LIMIT 1
+    """, (full_name,))
+    existing = cur.fetchone()
+    if existing:
+        cur.close()
+        conn.close()
+        return {
+            "status":        "duplicate",
+            "existing_uid":  existing["master_uid"],
+            "existing_name": existing["full_name"],
+        }
+
+    # Generate ID and insert
+    pwrx_id = generate_pwrx_id(cur)
+    cur.execute("""
+        INSERT INTO master_uid
+            (master_uid, first_name, last_name, full_name,
+             dari_id, armcare_id, vald_id, pushpress_id)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+    """, (pwrx_id, first_name.strip(), last_name.strip(), full_name,
+          dari_id or None, armcare_id or None, vald_id or None, pushpress_id or None))
+    conn.commit()
+    cur.close()
+    conn.close()
+    return {"status": "created", "master_uid": pwrx_id, "full_name": full_name}
+
+
+def backfill_links(table: str = None) -> dict:
+    """
+    Sweep source tables and populate master_uid where it is NULL but a name
+    match exists in the master_uid table.
+
+    Args:
+        table: if provided, only sweep that table. Otherwise sweep all four.
+
+    Returns:
+        dict of {table_name: rows_linked}
+    """
+    conn = get_conn()
+    cur  = conn.cursor()
+    results = {}
+
+    tables_to_sweep = [table] if table else [
+        "dari_motion", "vald_performance", "armcare", "pushpress"
+    ]
+
+    # Name expression per table (how each table stores the athlete name)
+    name_expr = {
+        "dari_motion":      "LOWER(TRIM(first_name || ' ' || last_name))",
+        "vald_performance": "LOWER(TRIM(athlete_name))",
+        "armcare":          "LOWER(TRIM(first_name || ' ' || last_name))",
+        "pushpress":        "LOWER(TRIM(first_name || ' ' || last_name))",
+    }
+
+    for tbl in tables_to_sweep:
+        expr = name_expr.get(tbl)
+        if not expr:
+            continue
+        cur.execute(f"""
+            UPDATE {tbl} t
+            SET master_uid = m.master_uid
+            FROM master_uid m
+            WHERE t.master_uid IS NULL
+              AND {expr.replace('first_name', 't.first_name')
+                       .replace('last_name',  't.last_name')
+                       .replace('athlete_name', 't.athlete_name')} =
+                  LOWER(TRIM(m.full_name))
+        """)
+        results[tbl] = cur.rowcount
+
+    conn.commit()
+    cur.close()
+    conn.close()
+    return results
+
+
+def get_unlinked_names(table: str) -> list[dict]:
+    """
+    Return distinct athlete names in a source table that have no master_uid.
+    Used to surface unlinked rows after an upload.
+    """
+    conn = get_conn()
+    cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    name_select = {
+        "dari_motion":      "first_name, last_name, (first_name || ' ' || last_name) AS full_name",
+        "vald_performance": "athlete_name AS full_name, NULL AS first_name, NULL AS last_name",
+        "armcare":          "first_name, last_name, (first_name || ' ' || last_name) AS full_name",
+        "pushpress":        "first_name, last_name, (first_name || ' ' || last_name) AS full_name",
+    }
+    sel = name_select.get(table)
+    if not sel:
+        return []
+
+    cur.execute(f"""
+        SELECT DISTINCT {sel}
+        FROM {table}
+        WHERE master_uid IS NULL
+          AND full_name IS NOT NULL
+          AND TRIM(full_name) != ''
+        ORDER BY full_name
+        LIMIT 100
+    """)
+    rows = [dict(r) for r in cur.fetchall()]
+    cur.close()
+    conn.close()
+    return rows
+
+
+def get_unlinked_counts() -> dict:
+    """Return count of rows with null master_uid per source table."""
+    conn = get_conn()
+    cur  = conn.cursor()
+    counts = {}
+    for tbl in ["dari_motion", "vald_performance", "armcare", "pushpress"]:
+        cur.execute(f"SELECT COUNT(*) FROM {tbl} WHERE master_uid IS NULL")
+        counts[tbl] = cur.fetchone()[0]
+    cur.close()
+    conn.close()
+    return counts
 
 
 # ─────────────────────────────────────────────────────────────────────────────
