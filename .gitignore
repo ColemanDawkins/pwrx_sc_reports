@@ -3,3 +3,11 @@
 __pycache__/
 *.pyc
 .env
+*.xlsx
+Data/
+Previous Versions/
+*.xlsx
+*.xls
+Data/
+Previous\ Versions/
+.DS_Store
