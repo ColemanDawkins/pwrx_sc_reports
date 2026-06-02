@@ -404,7 +404,7 @@ DO $$ BEGIN
     ALTER TABLE armcare ADD CONSTRAINT armcare_unique_session UNIQUE (master_uid, exam_date);
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'vald_unique_session') THEN
-    ALTER TABLE vald_performance ADD CONSTRAINT vald_unique_session UNIQUE (athlete_name, test_date, test_type, test_time);
+    ALTER TABLE vald_performance ADD CONSTRAINT vald_unique_session UNIQUE (athlete_name, test_date);
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'inbody_unique_session') THEN
     ALTER TABLE inbody ADD CONSTRAINT inbody_unique_session UNIQUE (master_uid, test_date);
@@ -735,7 +735,7 @@ COLUMN_ALIASES = {
     "throws":               ["Throws", "throws"],
     "bats":                 ["Bats", "bats"],
     "surgery":              ["Surgery", "surgery"],
-    "exam_time":            ["Time", "exam_time", "Exam Time"],
+    "exam_time":            ["exam_time", "Exam Time"],
     "timezone":             ["Timezone", "timezone"],
     "exam_type":            ["Exam Type", "exam_type"],
     "armshield_eligibility":["ArmShield Eligibility", "armshield_eligibility"],
@@ -1146,6 +1146,13 @@ def ingest_file(path: str, table: str, verbose: bool = True) -> dict:
 
     # Strip whitespace from all string columns
     df = df.apply(lambda col: col.str.strip() if col.dtype == "object" else col)
+
+    # Pre-rename ambiguous columns before alias matching
+    # Both Vald and ArmCare have a "Time" column that maps to different DB columns
+    if table == "vald_performance" and "Time" in df.columns:
+        df = df.rename(columns={"Time": "test_time"})
+    elif table == "armcare" and "Time" in df.columns:
+        df = df.rename(columns={"Time": "exam_time"})
 
     # Map columns
     df, col_warnings = _map_columns(df)
