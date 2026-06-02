@@ -896,6 +896,7 @@ html, body {
   <div class="pwrx-panel">
     <div class="pwrx-panel-header orange">InBody — Body Composition</div>
     <div class="pwrx-panel-body">
+      {% if inbody.available %}
       <!-- Donut centred full-width -->
       <div style="display:flex;justify-content:center;margin-bottom:12px;">
         {{ chart_inbody_donut }}
@@ -923,9 +924,34 @@ html, body {
           <div class="pwrx-stat-label">InBody Score</div>
         </div>
       </div>
+      <!-- Extra metrics row -->
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-bottom:10px;">
+        <div class="pwrx-stat-box">
+          <div class="pwrx-stat-value" style="color:{{ C.blueL }};font-size:14px;">{{ inbody.bmr }}</div>
+          <div class="pwrx-stat-label">BMR (kcal)</div>
+        </div>
+        <div class="pwrx-stat-box">
+          <div class="pwrx-stat-value" style="color:{{ C.amber }};font-size:14px;">{{ inbody.vfl }}</div>
+          <div class="pwrx-stat-label">Visceral Fat</div>
+        </div>
+        <div class="pwrx-stat-box">
+          <div class="pwrx-stat-value" style="color:{{ C.green }};font-size:14px;">{{ inbody.phase_angle }}°</div>
+          <div class="pwrx-stat-label">Phase Angle</div>
+        </div>
+        <div class="pwrx-stat-box">
+          <div class="pwrx-stat-value" style="color:{{ C.purple }};font-size:14px;">{{ inbody.ecw_tbw_ratio }}</div>
+          <div class="pwrx-stat-label">ECW/TBW</div>
+        </div>
+      </div>
       <div class="pwrx-divider"></div>
       <div class="pwrx-section-label">Segmental Lean Mass (lbs)</div>
       {{ chart_segments }}
+      {% else %}
+      <div style="display:flex;align-items:center;justify-content:center;height:200px;color:#4a6a8a;font-size:13px;flex-direction:column;gap:8px;">
+        <div style="font-size:28px;opacity:0.4;">⊘</div>
+        <div>No InBody data available</div>
+      </div>
+      {% endif %}
     </div>
   </div>
 
@@ -1026,7 +1052,7 @@ def build_summary_kpis(data):
         {"src": "VALD",    "lbl": "RSI-Modified",   "val": str(v["rsi_mod"]),       "color": C["green"],  "chip": chip(v["rsi_mod"],        vp["rsi_mod"])},
         {"src": "ArmCare", "lbl": "Arm Score",      "val": str(a["arm_score"]),     "color": C["orange"], "chip": chip(a["arm_score"],      ap["arm_score"])},
         {"src": "ArmCare", "lbl": "SVR",             "val": str(a["svr"]),           "color": C["amber"],  "chip": chip(a["svr"],            ap["svr"])},
-        {"src": "InBody",  "lbl": "Body Fat %",     "val": f'{ib["pbf"]}%',         "color": C["orange"], "chip": ""},
+        {"src": "InBody",  "lbl": "Body Fat %",     "val": f'{ib["pbf"]}%' if ib.get("available") else "N/A", "color": C["orange"], "chip": ""},
     ]
 
 

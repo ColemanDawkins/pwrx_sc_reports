@@ -87,6 +87,7 @@ with tab2:
         "Dari Motion":               "dari_motion",
         "ArmCare":                   "armcare",
         "Vald Performance":          "vald_performance",
+        "InBody":                    "inbody",
     }
 
     selected_source = st.selectbox("Select data source", list(source_options.keys()))
