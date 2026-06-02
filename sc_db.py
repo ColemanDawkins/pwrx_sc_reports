@@ -458,7 +458,7 @@ COLUMN_ALIASES = {
     "dari_id":      ["dari_id", "meta__person__unique_id", "DariID"],
     "armcare_id":   ["armcare_id", "ArmCare ID", "armcareid", "ArmCareID"],
     "vald_id":      ["vald_id", "ExternalId", "externalid", "ValdID"],
-    "inbody_uid":   ["inbody_uid", "InBodyID", "inbody_id", "InBody ID", "ID"],  # ID col = full athlete name in InBody
+    "inbody_uid":   ["inbody_uid", "InBodyID", "inbody_id", "InBody ID"],  # ID col = full athlete name in InBody exports
     # inbody
     "test_date":            ["Test Date / Time", "test_date", "Date"],
     "height":               ["Height", "height"],
@@ -1814,7 +1814,11 @@ if __name__ == "__main__":
     if args.file:
         if not args.table:
             parser.error("--table is required when ingesting a file")
-        result = ingest_file(args.file, args.table, verbose=True)
+        # Check Data/ folder if file not found in current directory
+        path = args.file
+        if not os.path.exists(path) and os.path.exists(os.path.join("Data", path)):
+            path = os.path.join("Data", path)
+        result = ingest_file(path, args.table, verbose=True)
         print(f"inserted={result['inserted']}, skipped={result['skipped']}, flagged={result['flagged']}")
         for w in result["warnings"]:
             print(f"  {w}")
