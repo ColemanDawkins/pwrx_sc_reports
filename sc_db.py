@@ -404,7 +404,7 @@ DO $$ BEGIN
     ALTER TABLE armcare ADD CONSTRAINT armcare_unique_session UNIQUE (master_uid, exam_date);
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'vald_unique_session') THEN
-    ALTER TABLE vald_performance ADD CONSTRAINT vald_unique_session UNIQUE (athlete_name, test_date, test_type);
+    ALTER TABLE vald_performance ADD CONSTRAINT vald_unique_session UNIQUE (athlete_name, test_date, test_type, test_time);
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'inbody_unique_session') THEN
     ALTER TABLE inbody ADD CONSTRAINT inbody_unique_session UNIQUE (master_uid, test_date);
@@ -1716,23 +1716,30 @@ def get_unlinked_names(table: str) -> list[dict]:
     conn = get_conn()
     cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-    name_select = {
-        "dari_motion":      "first_name, last_name, (first_name || ' ' || last_name) AS full_name",
-        "vald_performance": "athlete_name AS full_name, NULL AS first_name, NULL AS last_name",
-        "armcare":          "first_name, last_name, (first_name || ' ' || last_name) AS full_name",
-        "pushpress":        "first_name, last_name, (first_name || ' ' || last_name) AS full_name",
-        "inbody":           "inbody_uid AS full_name, NULL AS first_name, NULL AS last_name",
+    # Each entry: (select_expr, not_null_check)
+    # Can't use alias in WHERE, so we reference the actual column
+    name_config = {
+        "dari_motion":      ("first_name, last_name, (first_name || ' ' || last_name) AS full_name",
+                             "first_name IS NOT NULL AND last_name IS NOT NULL"),
+        "vald_performance": ("athlete_name AS full_name, NULL::text AS first_name, NULL::text AS last_name",
+                             "athlete_name IS NOT NULL AND TRIM(athlete_name) != ''"),
+        "armcare":          ("first_name, last_name, (first_name || ' ' || last_name) AS full_name",
+                             "first_name IS NOT NULL AND last_name IS NOT NULL"),
+        "pushpress":        ("first_name, last_name, (first_name || ' ' || last_name) AS full_name",
+                             "first_name IS NOT NULL AND last_name IS NOT NULL"),
+        "inbody":           ("inbody_uid AS full_name, NULL::text AS first_name, NULL::text AS last_name",
+                             "inbody_uid IS NOT NULL AND TRIM(inbody_uid) != ''"),
     }
-    sel = name_select.get(table)
-    if not sel:
+    cfg = name_config.get(table)
+    if not cfg:
         return []
+    sel, not_null = cfg
 
     cur.execute(f"""
         SELECT DISTINCT {sel}
         FROM {table}
         WHERE master_uid IS NULL
-          AND full_name IS NOT NULL
-          AND TRIM(full_name) != ''
+          AND {not_null}
         ORDER BY full_name
         LIMIT 100
     """)
