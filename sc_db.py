@@ -1391,42 +1391,39 @@ def load_athlete_data(athlete_name: str) -> dict:
     uid  = athlete["master_uid"]
     name = athlete["full_name"]
 
-    # ── All 4 source tables in one round trip using UNION ALL ───────────────
-    # Each query tagged with a 'source' literal so we can split the results.
-    # Columns padded with NULLs to give each row a uniform shape.
+    # ── Dari ────────────────────────────────────────────────────────────────
     cur.execute("""
-        SELECT 'dari' AS src, session_ts::text AS date_col,
-               score_overall, score_function, score_explosive,
+        SELECT session_ts, score_overall, score_function, score_explosive,
                score_dysfunction, score_vulnerability,
                focus_0_name, focus_0_score, focus_1_name, focus_1_score,
-               focus_2_name, focus_2_score,
-               NULL::numeric AS c1, NULL::numeric AS c2, NULL::numeric AS c3,
-               NULL::numeric AS c4, NULL::numeric AS c5, NULL::numeric AS c6,
-               NULL::numeric AS c7, NULL::numeric AS c8
+               focus_2_name, focus_2_score
         FROM dari_motion
-        WHERE master_uid = %(uid)s AND session_ts IS NOT NULL
-        ORDER BY session_ts DESC LIMIT %(n)s
-    """, {"uid": uid, "n": MAX_SESSIONS})
-    dari_rows_raw = cur.fetchall()
+        WHERE master_uid = %s AND session_ts IS NOT NULL
+        ORDER BY session_ts DESC LIMIT %s
+    """, (uid, MAX_SESSIONS))
+    dari_rows = list(reversed(cur.fetchall()))
 
+    # ── Vald ────────────────────────────────────────────────────────────────
     cur.execute("""
         SELECT test_date, jump_height_flight_in, peak_power_w,
                rsi_modified, eccentric_peak_force_n, bodyweight_lbs
         FROM vald_performance
-        WHERE master_uid = %(uid)s AND test_date IS NOT NULL
-        ORDER BY test_date DESC LIMIT %(n)s
-    """, {"uid": uid, "n": MAX_SESSIONS})
-    vald_rows_raw = cur.fetchall()
+        WHERE master_uid = %s AND test_date IS NOT NULL
+        ORDER BY test_date DESC LIMIT %s
+    """, (uid, MAX_SESSIONS))
+    vald_rows = list(reversed(cur.fetchall()))
 
+    # ── ArmCare ─────────────────────────────────────────────────────────────
     cur.execute("""
         SELECT exam_date, arm_score, total_strength,
                shoulder_balance, svr, irtarm_strength, ertarm_strength, velo
         FROM armcare
-        WHERE master_uid = %(uid)s AND exam_date IS NOT NULL
-        ORDER BY exam_date DESC LIMIT %(n)s
-    """, {"uid": uid, "n": MAX_SESSIONS})
-    arm_rows_raw = cur.fetchall()
+        WHERE master_uid = %s AND exam_date IS NOT NULL
+        ORDER BY exam_date DESC LIMIT %s
+    """, (uid, MAX_SESSIONS))
+    arm_rows = list(reversed(cur.fetchall()))
 
+    # ── InBody ───────────────────────────────────────────────────────────────
     cur.execute("""
         SELECT test_date, inbody_score, weight, bmi, pbf,
                smm, ffm, bfm, tbw, ecw_tbw_ratio,
@@ -1440,19 +1437,13 @@ def load_athlete_data(athlete_name: str) -> dict:
                weight_lower, weight_upper, smm_lower, smm_upper,
                pbf_lower, pbf_upper, bmi_lower, bmi_upper
         FROM inbody
-        WHERE master_uid = %(uid)s AND test_date IS NOT NULL
-        ORDER BY test_date DESC LIMIT %(n)s
-    """, {"uid": uid, "n": MAX_SESSIONS})
-    inbody_rows_raw = cur.fetchall()
+        WHERE master_uid = %s AND test_date IS NOT NULL
+        ORDER BY test_date DESC LIMIT %s
+    """, (uid, MAX_SESSIONS))
+    inbody_rows = list(reversed(cur.fetchall()))
 
     cur.close()
     conn.close()
-
-    # Reverse each to chronological order
-    dari_rows   = list(reversed(dari_rows_raw))
-    vald_rows   = list(reversed(vald_rows_raw))
-    arm_rows    = list(reversed(arm_rows_raw))
-    inbody_rows = list(reversed(inbody_rows_raw))
 
     # ── Map to DATA dict shape ───────────────────────────────────────────────
     def _dari_trend(rows):
