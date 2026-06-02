@@ -1180,8 +1180,10 @@ def generate_pwrx_id(cur) -> str:
     row = cur.fetchone()
     if row:
         try:
-            num = int(row[0].replace("PWRX", "")) + 1
-        except ValueError:
+            # Handle both RealDictCursor (dict) and regular cursor (tuple)
+            val = row["master_uid"] if isinstance(row, dict) else row[0]
+            num = int(str(val).replace("PWRX", "")) + 1
+        except (ValueError, KeyError, TypeError):
             num = 1
     else:
         num = 1
@@ -1218,37 +1220,41 @@ def create_athlete(first_name: str, last_name: str,
     """
     full_name = f"{first_name.strip()} {last_name.strip()}"
     conn = get_conn()
-    cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur  = conn.cursor()  # plain cursor — consistent for both fetchone patterns
 
-    # Duplicate check
-    cur.execute("""
-        SELECT master_uid, full_name FROM master_uid
-        WHERE LOWER(TRIM(full_name)) = LOWER(TRIM(%s))
-        LIMIT 1
-    """, (full_name,))
-    existing = cur.fetchone()
-    if existing:
+    try:
+        # Duplicate check
+        cur.execute("""
+            SELECT master_uid, full_name FROM master_uid
+            WHERE LOWER(TRIM(full_name)) = LOWER(TRIM(%s))
+            LIMIT 1
+        """, (full_name,))
+        existing = cur.fetchone()
+        if existing:
+            return {
+                "status":        "duplicate",
+                "existing_uid":  existing[0],
+                "existing_name": existing[1],
+            }
+
+        # Generate ID and insert
+        pwrx_id = generate_pwrx_id(cur)
+        cur.execute("""
+            INSERT INTO master_uid
+                (master_uid, first_name, last_name, full_name,
+                 dari_id, armcare_id, vald_id, pushpress_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """, (pwrx_id, first_name.strip(), last_name.strip(), full_name,
+              dari_id or None, armcare_id or None, vald_id or None, pushpress_id or None))
+        conn.commit()
+        return {"status": "created", "master_uid": pwrx_id, "full_name": full_name}
+
+    except Exception as exc:
+        conn.rollback()
+        raise RuntimeError(f"create_athlete failed: {exc}") from exc
+    finally:
         cur.close()
         conn.close()
-        return {
-            "status":        "duplicate",
-            "existing_uid":  existing["master_uid"],
-            "existing_name": existing["full_name"],
-        }
-
-    # Generate ID and insert
-    pwrx_id = generate_pwrx_id(cur)
-    cur.execute("""
-        INSERT INTO master_uid
-            (master_uid, first_name, last_name, full_name,
-             dari_id, armcare_id, vald_id, pushpress_id)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-    """, (pwrx_id, first_name.strip(), last_name.strip(), full_name,
-          dari_id or None, armcare_id or None, vald_id or None, pushpress_id or None))
-    conn.commit()
-    cur.close()
-    conn.close()
-    return {"status": "created", "master_uid": pwrx_id, "full_name": full_name}
 
 
 def backfill_links(table: str = None) -> dict:
