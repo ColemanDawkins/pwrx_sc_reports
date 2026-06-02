@@ -316,13 +316,12 @@ with tab4:
     if unlinked_cnts:
         total_unlinked = sum(unlinked_cnts.values())
         if total_unlinked > 0:
-            st.warning(
-                f"**{total_unlinked} rows across all tables have no PWRX ID link.** "
-                "Use the Athletes tab → Re-link All to fix."
-            )
-            cols = st.columns(4)
+            cols = st.columns(5)
+            cols[0].metric("Total Unlinked", total_unlinked)
             for i, (tbl, cnt) in enumerate(unlinked_cnts.items()):
-                cols[i].metric(tbl.replace("_", " ").title(), f"{cnt} unlinked")
+                label = tbl.replace("dari_motion","Dari").replace("vald_performance","Vald").replace("armcare","ArmCare").replace("pushpress","PushPress")
+                cols[i+1].metric(label, cnt)
+            st.caption("Rows with no PWRX ID link — use Athletes tab → Re-link All to fix.")
 
     if roster_data2:
         df = pd.DataFrame(roster_data2)
