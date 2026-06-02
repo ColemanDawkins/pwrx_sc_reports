@@ -394,7 +394,52 @@ CREATE INDEX IF NOT EXISTS idx_armcare_master  ON armcare(master_uid);
 CREATE INDEX IF NOT EXISTS idx_armcare_date    ON armcare(exam_date);
 CREATE INDEX IF NOT EXISTS idx_vald_master     ON vald_performance(master_uid);
 CREATE INDEX IF NOT EXISTS idx_vald_date       ON vald_performance(test_date);
-CREATE INDEX IF NOT EXISTS idx_pushpress_master ON pushpress(master_uid);
+CREATE INDEX IF NOT EXISTS idx_pushpress_master  ON pushpress(master_uid);
+CREATE INDEX IF NOT EXISTS idx_master_full_name  ON master_uid (LOWER(full_name));
+CREATE INDEX IF NOT EXISTS idx_master_uid_text   ON master_uid (master_uid);
+
+-- ── Composite unique constraints (prevent duplicate session uploads) ──────────
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'armcare_unique_session') THEN
+    ALTER TABLE armcare ADD CONSTRAINT armcare_unique_session UNIQUE (master_uid, exam_date);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'vald_unique_session') THEN
+    ALTER TABLE vald_performance ADD CONSTRAINT vald_unique_session UNIQUE (athlete_name, test_date, test_type, test_time);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'inbody_unique_session') THEN
+    ALTER TABLE inbody ADD CONSTRAINT inbody_unique_session UNIQUE (master_uid, test_date);
+  END IF;
+END $$;
+
+-- ── updated_at columns on all source tables (suggestion 7) ───────────────────
+ALTER TABLE dari_motion     ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE armcare         ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE vald_performance ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE inbody          ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE pushpress       ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
+CREATE OR REPLACE FUNCTION set_updated_at()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN NEW.updated_at = NOW(); RETURN NEW; END;
+$$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'dari_updated_at') THEN
+    CREATE TRIGGER dari_updated_at BEFORE UPDATE ON dari_motion FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'armcare_updated_at') THEN
+    CREATE TRIGGER armcare_updated_at BEFORE UPDATE ON armcare FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'vald_updated_at') THEN
+    CREATE TRIGGER vald_updated_at BEFORE UPDATE ON vald_performance FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'inbody_updated_at') THEN
+    CREATE TRIGGER inbody_updated_at BEFORE UPDATE ON inbody FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'pushpress_updated_at') THEN
+    CREATE TRIGGER pushpress_updated_at BEFORE UPDATE ON pushpress FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+  END IF;
+END $$;
 """
 
 
@@ -413,7 +458,7 @@ COLUMN_ALIASES = {
     "dari_id":      ["dari_id", "meta__person__unique_id", "DariID"],
     "armcare_id":   ["armcare_id", "ArmCare ID", "armcareid", "ArmCareID"],
     "vald_id":      ["vald_id", "ExternalId", "externalid", "ValdID"],
-    "inbody_uid":   ["inbody_uid", "InBodyID", "inbody_id", "InBody ID", "ID"],
+    "inbody_uid":   ["inbody_uid", "InBodyID", "inbody_id", "InBody ID", "ID"],  # ID col = full athlete name in InBody
     # inbody
     "test_date":            ["Test Date / Time", "test_date", "Date"],
     "height":               ["Height", "height"],
@@ -1043,8 +1088,9 @@ def _link_master_uid(df: pd.DataFrame, table: str, conn) -> pd.DataFrame:
 
         # Detect which column holds the athlete name in this file
         # Note: for dari_motion, 'name' is the session type — use first_name+last_name
+        # Note: for inbody, inbody_uid holds the full name
         name_col = next(
-            (c for c in ["full_name", "athlete_name"] if c in df.columns),
+            (c for c in ["full_name", "athlete_name", "inbody_uid"] if c in df.columns),
             None
         )
         # For tables with separate first/last name columns (dari, armcare), build combined key
@@ -1177,30 +1223,63 @@ def ingest_file(path: str, table: str, verbose: bool = True) -> dict:
 # ROSTER QUERY
 # ─────────────────────────────────────────────────────────────────────────────
 
-def get_roster() -> list[dict]:
-    """Return all athletes with session counts per source."""
+# Simple in-process cache for the roster query (60 second TTL)
+_roster_cache: dict = {"data": None, "expires": 0.0}
+
+def get_roster(force_refresh: bool = False) -> list[dict]:
+    """
+    Return all athletes with session counts per source.
+    Result is cached for 60 seconds to avoid hammering the DB on every
+    Streamlit page render.
+    """
+    import time
+    now = time.time()
+    if not force_refresh and _roster_cache["data"] and now < _roster_cache["expires"]:
+        return _roster_cache["data"]
+
     conn = get_conn()
     df = pd.read_sql("""
         SELECT
             m.master_uid,
             m.full_name,
-            COUNT(DISTINCT d.id)  AS dari_sessions,
-            COUNT(DISTINCT v.id)  AS vald_sessions,
-            COUNT(DISTINCT a.id)  AS armcare_sessions,
-            COUNT(DISTINCT p.id)  AS pushpress_records,
-            MAX(d.session_ts)     AS last_dari,
-            MAX(v.test_date)      AS last_vald,
-            MAX(a.exam_date)      AS last_armcare
+            COALESCE(d.cnt, 0)  AS dari_sessions,
+            COALESCE(v.cnt, 0)  AS vald_sessions,
+            COALESCE(a.cnt, 0)  AS armcare_sessions,
+            COALESCE(p.cnt, 0)  AS pushpress_records,
+            COALESCE(i.cnt, 0)  AS inbody_records,
+            d.last_ts           AS last_dari,
+            v.last_dt           AS last_vald,
+            a.last_dt           AS last_armcare,
+            i.last_dt           AS last_inbody
         FROM master_uid m
-        LEFT JOIN dari_motion     d ON d.master_uid = m.master_uid
-        LEFT JOIN vald_performance v ON v.master_uid = m.master_uid
-        LEFT JOIN armcare          a ON a.master_uid = m.master_uid
-        LEFT JOIN pushpress        p ON p.master_uid = m.master_uid
-        GROUP BY m.master_uid, m.full_name
+        LEFT JOIN (
+            SELECT master_uid, COUNT(*) AS cnt, MAX(session_ts) AS last_ts
+            FROM dari_motion GROUP BY master_uid
+        ) d ON d.master_uid = m.master_uid
+        LEFT JOIN (
+            SELECT master_uid, COUNT(*) AS cnt, MAX(test_date) AS last_dt
+            FROM vald_performance GROUP BY master_uid
+        ) v ON v.master_uid = m.master_uid
+        LEFT JOIN (
+            SELECT master_uid, COUNT(*) AS cnt, MAX(exam_date) AS last_dt
+            FROM armcare GROUP BY master_uid
+        ) a ON a.master_uid = m.master_uid
+        LEFT JOIN (
+            SELECT master_uid, COUNT(*) AS cnt
+            FROM pushpress GROUP BY master_uid
+        ) p ON p.master_uid = m.master_uid
+        LEFT JOIN (
+            SELECT master_uid, COUNT(*) AS cnt, MAX(test_date) AS last_dt
+            FROM inbody GROUP BY master_uid
+        ) i ON i.master_uid = m.master_uid
         ORDER BY m.full_name
     """, conn)
     conn.close()
-    return df.to_dict("records")
+
+    result = df.to_dict("records")
+    _roster_cache["data"]    = result
+    _roster_cache["expires"] = now + 60.0
+    return result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1615,21 +1694,25 @@ def backfill_links(table: str = None) -> dict:
         "vald_performance": "LOWER(TRIM(athlete_name))",
         "armcare":          "LOWER(TRIM(first_name || ' ' || last_name))",
         "pushpress":        "LOWER(TRIM(first_name || ' ' || last_name))",
+        "inbody":           "LOWER(TRIM(inbody_uid))",  # ID col = full name in InBody exports
     }
 
     for tbl in tables_to_sweep:
         expr = name_expr.get(tbl)
         if not expr:
             continue
+        # Build the expression with table alias
+        t_expr = (expr
+                  .replace('first_name',   't.first_name')
+                  .replace('last_name',    't.last_name')
+                  .replace('athlete_name', 't.athlete_name')
+                  .replace('inbody_uid',   't.inbody_uid'))
         cur.execute(f"""
             UPDATE {tbl} t
             SET master_uid = m.master_uid
             FROM master_uid m
             WHERE t.master_uid IS NULL
-              AND {expr.replace('first_name', 't.first_name')
-                       .replace('last_name',  't.last_name')
-                       .replace('athlete_name', 't.athlete_name')} =
-                  LOWER(TRIM(m.full_name))
+              AND {t_expr} = LOWER(TRIM(m.full_name))
         """)
         results[tbl] = cur.rowcount
 
@@ -1647,22 +1730,30 @@ def get_unlinked_names(table: str) -> list[dict]:
     conn = get_conn()
     cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-    name_select = {
-        "dari_motion":      "first_name, last_name, (first_name || ' ' || last_name) AS full_name",
-        "vald_performance": "athlete_name AS full_name, NULL AS first_name, NULL AS last_name",
-        "armcare":          "first_name, last_name, (first_name || ' ' || last_name) AS full_name",
-        "pushpress":        "first_name, last_name, (first_name || ' ' || last_name) AS full_name",
+    # Each entry: (select_expr, not_null_check)
+    # Can't use alias in WHERE, so we reference the actual column
+    name_config = {
+        "dari_motion":      ("first_name, last_name, (first_name || ' ' || last_name) AS full_name",
+                             "first_name IS NOT NULL AND last_name IS NOT NULL"),
+        "vald_performance": ("athlete_name AS full_name, NULL::text AS first_name, NULL::text AS last_name",
+                             "athlete_name IS NOT NULL AND TRIM(athlete_name) != ''"),
+        "armcare":          ("first_name, last_name, (first_name || ' ' || last_name) AS full_name",
+                             "first_name IS NOT NULL AND last_name IS NOT NULL"),
+        "pushpress":        ("first_name, last_name, (first_name || ' ' || last_name) AS full_name",
+                             "first_name IS NOT NULL AND last_name IS NOT NULL"),
+        "inbody":           ("inbody_uid AS full_name, NULL::text AS first_name, NULL::text AS last_name",
+                             "inbody_uid IS NOT NULL AND TRIM(inbody_uid) != ''"),
     }
-    sel = name_select.get(table)
-    if not sel:
+    cfg = name_config.get(table)
+    if not cfg:
         return []
+    sel, not_null = cfg
 
     cur.execute(f"""
         SELECT DISTINCT {sel}
         FROM {table}
         WHERE master_uid IS NULL
-          AND full_name IS NOT NULL
-          AND TRIM(full_name) != ''
+          AND {not_null}
         ORDER BY full_name
         LIMIT 100
     """)
