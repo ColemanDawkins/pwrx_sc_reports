@@ -394,7 +394,52 @@ CREATE INDEX IF NOT EXISTS idx_armcare_master  ON armcare(master_uid);
 CREATE INDEX IF NOT EXISTS idx_armcare_date    ON armcare(exam_date);
 CREATE INDEX IF NOT EXISTS idx_vald_master     ON vald_performance(master_uid);
 CREATE INDEX IF NOT EXISTS idx_vald_date       ON vald_performance(test_date);
-CREATE INDEX IF NOT EXISTS idx_pushpress_master ON pushpress(master_uid);
+CREATE INDEX IF NOT EXISTS idx_pushpress_master  ON pushpress(master_uid);
+CREATE INDEX IF NOT EXISTS idx_master_full_name  ON master_uid (LOWER(full_name));
+CREATE INDEX IF NOT EXISTS idx_master_uid_text   ON master_uid (master_uid);
+
+-- ── Composite unique constraints (prevent duplicate session uploads) ──────────
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'armcare_unique_session') THEN
+    ALTER TABLE armcare ADD CONSTRAINT armcare_unique_session UNIQUE (master_uid, exam_date);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'vald_unique_session') THEN
+    ALTER TABLE vald_performance ADD CONSTRAINT vald_unique_session UNIQUE (athlete_name, test_date, test_type);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'inbody_unique_session') THEN
+    ALTER TABLE inbody ADD CONSTRAINT inbody_unique_session UNIQUE (master_uid, test_date);
+  END IF;
+END $$;
+
+-- ── updated_at columns on all source tables (suggestion 7) ───────────────────
+ALTER TABLE dari_motion     ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE armcare         ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE vald_performance ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE inbody          ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE pushpress       ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
+CREATE OR REPLACE FUNCTION set_updated_at()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN NEW.updated_at = NOW(); RETURN NEW; END;
+$$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'dari_updated_at') THEN
+    CREATE TRIGGER dari_updated_at BEFORE UPDATE ON dari_motion FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'armcare_updated_at') THEN
+    CREATE TRIGGER armcare_updated_at BEFORE UPDATE ON armcare FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'vald_updated_at') THEN
+    CREATE TRIGGER vald_updated_at BEFORE UPDATE ON vald_performance FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'inbody_updated_at') THEN
+    CREATE TRIGGER inbody_updated_at BEFORE UPDATE ON inbody FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'pushpress_updated_at') THEN
+    CREATE TRIGGER pushpress_updated_at BEFORE UPDATE ON pushpress FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+  END IF;
+END $$;
 """
 
 
@@ -413,7 +458,7 @@ COLUMN_ALIASES = {
     "dari_id":      ["dari_id", "meta__person__unique_id", "DariID"],
     "armcare_id":   ["armcare_id", "ArmCare ID", "armcareid", "ArmCareID"],
     "vald_id":      ["vald_id", "ExternalId", "externalid", "ValdID"],
-    "inbody_uid":   ["inbody_uid", "InBodyID", "inbody_id", "InBody ID", "ID"],
+    "inbody_uid":   ["inbody_uid", "InBodyID", "inbody_id", "InBody ID", "ID"],  # ID col = full athlete name in InBody
     # inbody
     "test_date":            ["Test Date / Time", "test_date", "Date"],
     "height":               ["Height", "height"],
@@ -1043,8 +1088,9 @@ def _link_master_uid(df: pd.DataFrame, table: str, conn) -> pd.DataFrame:
 
         # Detect which column holds the athlete name in this file
         # Note: for dari_motion, 'name' is the session type — use first_name+last_name
+        # Note: for inbody, inbody_uid holds the full name
         name_col = next(
-            (c for c in ["full_name", "athlete_name"] if c in df.columns),
+            (c for c in ["full_name", "athlete_name", "inbody_uid"] if c in df.columns),
             None
         )
         # For tables with separate first/last name columns (dari, armcare), build combined key
@@ -1177,8 +1223,20 @@ def ingest_file(path: str, table: str, verbose: bool = True) -> dict:
 # ROSTER QUERY
 # ─────────────────────────────────────────────────────────────────────────────
 
-def get_roster() -> list[dict]:
-    """Return all athletes with session counts per source."""
+# Simple in-process cache for the roster query (60 second TTL)
+_roster_cache: dict = {"data": None, "expires": 0.0}
+
+def get_roster(force_refresh: bool = False) -> list[dict]:
+    """
+    Return all athletes with session counts per source.
+    Result is cached for 60 seconds to avoid hammering the DB on every
+    Streamlit page render.
+    """
+    import time
+    now = time.time()
+    if not force_refresh and _roster_cache["data"] and now < _roster_cache["expires"]:
+        return _roster_cache["data"]
+
     conn = get_conn()
     df = pd.read_sql("""
         SELECT
@@ -1188,19 +1246,26 @@ def get_roster() -> list[dict]:
             COUNT(DISTINCT v.id)  AS vald_sessions,
             COUNT(DISTINCT a.id)  AS armcare_sessions,
             COUNT(DISTINCT p.id)  AS pushpress_records,
+            COUNT(DISTINCT i.id)  AS inbody_records,
             MAX(d.session_ts)     AS last_dari,
             MAX(v.test_date)      AS last_vald,
-            MAX(a.exam_date)      AS last_armcare
+            MAX(a.exam_date)      AS last_armcare,
+            MAX(i.test_date)      AS last_inbody
         FROM master_uid m
-        LEFT JOIN dari_motion     d ON d.master_uid = m.master_uid
-        LEFT JOIN vald_performance v ON v.master_uid = m.master_uid
-        LEFT JOIN armcare          a ON a.master_uid = m.master_uid
-        LEFT JOIN pushpress        p ON p.master_uid = m.master_uid
+        LEFT JOIN dari_motion      d ON d.master_uid = m.master_uid
+        LEFT JOIN vald_performance  v ON v.master_uid = m.master_uid
+        LEFT JOIN armcare           a ON a.master_uid = m.master_uid
+        LEFT JOIN pushpress         p ON p.master_uid = m.master_uid
+        LEFT JOIN inbody            i ON i.master_uid = m.master_uid
         GROUP BY m.master_uid, m.full_name
         ORDER BY m.full_name
     """, conn)
     conn.close()
-    return df.to_dict("records")
+
+    result = df.to_dict("records")
+    _roster_cache["data"]    = result
+    _roster_cache["expires"] = now + 60.0
+    return result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1326,39 +1391,42 @@ def load_athlete_data(athlete_name: str) -> dict:
     uid  = athlete["master_uid"]
     name = athlete["full_name"]
 
-    # ── Dari ────────────────────────────────────────────────────────────────
+    # ── All 4 source tables in one round trip using UNION ALL ───────────────
+    # Each query tagged with a 'source' literal so we can split the results.
+    # Columns padded with NULLs to give each row a uniform shape.
     cur.execute("""
-        SELECT session_ts, score_overall, score_function, score_explosive,
+        SELECT 'dari' AS src, session_ts::text AS date_col,
+               score_overall, score_function, score_explosive,
                score_dysfunction, score_vulnerability,
                focus_0_name, focus_0_score, focus_1_name, focus_1_score,
-               focus_2_name, focus_2_score
+               focus_2_name, focus_2_score,
+               NULL::numeric AS c1, NULL::numeric AS c2, NULL::numeric AS c3,
+               NULL::numeric AS c4, NULL::numeric AS c5, NULL::numeric AS c6,
+               NULL::numeric AS c7, NULL::numeric AS c8
         FROM dari_motion
-        WHERE master_uid = %s AND session_ts IS NOT NULL
-        ORDER BY session_ts DESC LIMIT %s
-    """, (uid, MAX_SESSIONS))
-    dari_rows = list(reversed(cur.fetchall()))
+        WHERE master_uid = %(uid)s AND session_ts IS NOT NULL
+        ORDER BY session_ts DESC LIMIT %(n)s
+    """, {"uid": uid, "n": MAX_SESSIONS})
+    dari_rows_raw = cur.fetchall()
 
-    # ── Vald ────────────────────────────────────────────────────────────────
     cur.execute("""
         SELECT test_date, jump_height_flight_in, peak_power_w,
                rsi_modified, eccentric_peak_force_n, bodyweight_lbs
         FROM vald_performance
-        WHERE master_uid = %s AND test_date IS NOT NULL
-        ORDER BY test_date DESC LIMIT %s
-    """, (uid, MAX_SESSIONS))
-    vald_rows = list(reversed(cur.fetchall()))
+        WHERE master_uid = %(uid)s AND test_date IS NOT NULL
+        ORDER BY test_date DESC LIMIT %(n)s
+    """, {"uid": uid, "n": MAX_SESSIONS})
+    vald_rows_raw = cur.fetchall()
 
-    # ── ArmCare ─────────────────────────────────────────────────────────────
     cur.execute("""
         SELECT exam_date, arm_score, total_strength,
                shoulder_balance, svr, irtarm_strength, ertarm_strength, velo
         FROM armcare
-        WHERE master_uid = %s AND exam_date IS NOT NULL
-        ORDER BY exam_date DESC LIMIT %s
-    """, (uid, MAX_SESSIONS))
-    arm_rows = list(reversed(cur.fetchall()))
+        WHERE master_uid = %(uid)s AND exam_date IS NOT NULL
+        ORDER BY exam_date DESC LIMIT %(n)s
+    """, {"uid": uid, "n": MAX_SESSIONS})
+    arm_rows_raw = cur.fetchall()
 
-    # ── InBody ───────────────────────────────────────────────────────────────
     cur.execute("""
         SELECT test_date, inbody_score, weight, bmi, pbf,
                smm, ffm, bfm, tbw, ecw_tbw_ratio,
@@ -1372,13 +1440,19 @@ def load_athlete_data(athlete_name: str) -> dict:
                weight_lower, weight_upper, smm_lower, smm_upper,
                pbf_lower, pbf_upper, bmi_lower, bmi_upper
         FROM inbody
-        WHERE master_uid = %s AND test_date IS NOT NULL
-        ORDER BY test_date DESC LIMIT %s
-    """, (uid, MAX_SESSIONS))
-    inbody_rows = list(reversed(cur.fetchall()))
+        WHERE master_uid = %(uid)s AND test_date IS NOT NULL
+        ORDER BY test_date DESC LIMIT %(n)s
+    """, {"uid": uid, "n": MAX_SESSIONS})
+    inbody_rows_raw = cur.fetchall()
 
     cur.close()
     conn.close()
+
+    # Reverse each to chronological order
+    dari_rows   = list(reversed(dari_rows_raw))
+    vald_rows   = list(reversed(vald_rows_raw))
+    arm_rows    = list(reversed(arm_rows_raw))
+    inbody_rows = list(reversed(inbody_rows_raw))
 
     # ── Map to DATA dict shape ───────────────────────────────────────────────
     def _dari_trend(rows):
@@ -1615,21 +1689,25 @@ def backfill_links(table: str = None) -> dict:
         "vald_performance": "LOWER(TRIM(athlete_name))",
         "armcare":          "LOWER(TRIM(first_name || ' ' || last_name))",
         "pushpress":        "LOWER(TRIM(first_name || ' ' || last_name))",
+        "inbody":           "LOWER(TRIM(inbody_uid))",  # ID col = full name in InBody exports
     }
 
     for tbl in tables_to_sweep:
         expr = name_expr.get(tbl)
         if not expr:
             continue
+        # Build the expression with table alias
+        t_expr = (expr
+                  .replace('first_name',   't.first_name')
+                  .replace('last_name',    't.last_name')
+                  .replace('athlete_name', 't.athlete_name')
+                  .replace('inbody_uid',   't.inbody_uid'))
         cur.execute(f"""
             UPDATE {tbl} t
             SET master_uid = m.master_uid
             FROM master_uid m
             WHERE t.master_uid IS NULL
-              AND {expr.replace('first_name', 't.first_name')
-                       .replace('last_name',  't.last_name')
-                       .replace('athlete_name', 't.athlete_name')} =
-                  LOWER(TRIM(m.full_name))
+              AND {t_expr} = LOWER(TRIM(m.full_name))
         """)
         results[tbl] = cur.rowcount
 
@@ -1652,6 +1730,7 @@ def get_unlinked_names(table: str) -> list[dict]:
         "vald_performance": "athlete_name AS full_name, NULL AS first_name, NULL AS last_name",
         "armcare":          "first_name, last_name, (first_name || ' ' || last_name) AS full_name",
         "pushpress":        "first_name, last_name, (first_name || ' ' || last_name) AS full_name",
+        "inbody":           "inbody_uid AS full_name, NULL AS first_name, NULL AS last_name",
     }
     sel = name_select.get(table)
     if not sel:
