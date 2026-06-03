@@ -1076,6 +1076,29 @@ def _link_master_uid(df: pd.DataFrame, table: str, conn) -> pd.DataFrame:
         df["master_uid"] = df[src_col].map(id_lookup)
         linked_id = df["master_uid"].notna().sum()
         print(f"  Pass 1 (ID match): linked {linked_id}/{len(df)} rows via {src_col}")
+    elif table == "inbody":
+        # InBody: link via phone number (inbody_uid = phone) matched against pushpress.phone
+        df["master_uid"] = None
+        linked_id = 0
+        id_col = "inbody_uid" if "inbody_uid" in df.columns else None
+        if id_col:
+            # Build phone -> master_uid lookup from pushpress table
+            # Normalize both sides: strip all non-digits
+            cur.execute("""
+                SELECT REGEXP_REPLACE(p.phone, '[^0-9]', '', 'g') AS phone_clean,
+                       p.master_uid
+                FROM pushpress p
+                WHERE p.phone IS NOT NULL AND p.master_uid IS NOT NULL
+            """)
+            phone_lookup = {row[0]: row[1] for row in cur.fetchall()}
+            # Normalize inbody phone column
+            df["_phone_clean"] = df[id_col].str.replace(r"[^0-9]", "", regex=True)
+            df["master_uid"] = df["_phone_clean"].map(phone_lookup)
+            df = df.drop(columns=["_phone_clean"])
+            linked_id = df["master_uid"].notna().sum()
+            print(f"  Pass 1 (phone match): linked {linked_id}/{len(df)} rows via phone → pushpress")
+        else:
+            print(f"  Pass 1: no ID column found for inbody")
     else:
         df["master_uid"] = None
         linked_id = 0
@@ -1146,6 +1169,14 @@ def ingest_file(path: str, table: str, verbose: bool = True) -> dict:
 
     # Strip whitespace from all string columns
     df = df.apply(lambda col: col.str.strip() if col.dtype == "object" else col)
+
+    # Strip <> and normalize phone number from InBody ID column
+    if table == "inbody":
+        id_col = "inbody_uid" if "inbody_uid" in df.columns else ("ID" if "ID" in df.columns else None)
+        if id_col:
+            df[id_col] = (df[id_col]
+                          .str.strip("<>")
+                          .str.replace(r"[^0-9]", "", regex=True))
 
     # Pre-rename ambiguous columns before alias matching
     # Both Vald and ArmCare have a "Time" column that maps to different DB columns
@@ -1709,7 +1740,7 @@ def backfill_links(table: str = None) -> dict:
         "vald_performance": "LOWER(TRIM(athlete_name))",
         "armcare":          "LOWER(TRIM(first_name || ' ' || last_name))",
         "pushpress":        "LOWER(TRIM(first_name || ' ' || last_name))",
-        "inbody":           "LOWER(TRIM(inbody_uid))",  # ID col = full name in InBody exports
+        # inbody uses phone number matching via pushpress — handled separately below
     }
 
     for tbl in tables_to_sweep:
@@ -1730,6 +1761,22 @@ def backfill_links(table: str = None) -> dict:
               AND {t_expr} = LOWER(TRIM(m.full_name))
         """)
         results[tbl] = cur.rowcount
+
+    # ── InBody: backfill via phone number match against pushpress ────────────
+    if table is None or table == "inbody":
+        cur.execute("""
+            UPDATE inbody i
+            SET master_uid = p.master_uid
+            FROM pushpress p
+            WHERE i.master_uid IS NULL
+              AND REGEXP_REPLACE(i.inbody_uid, '[^0-9]', '', 'g') =
+                  REGEXP_REPLACE(p.phone,      '[^0-9]', '', 'g')
+              AND p.master_uid IS NOT NULL
+              AND i.inbody_uid IS NOT NULL
+              AND p.phone IS NOT NULL
+        """)
+        results["inbody"] = cur.rowcount
+        print(f"  InBody phone backfill: {cur.rowcount} rows linked")
 
     conn.commit()
     cur.close()
