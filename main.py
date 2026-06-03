@@ -80,9 +80,11 @@ def roster():
                 "vald_sessions":     int(r["vald_sessions"]    or 0),
                 "armcare_sessions":  int(r["armcare_sessions"] or 0),
                 "pushpress_records": int(r["pushpress_records"] or 0),
+                "inbody_records":     int(r["inbody_records"]  or 0),
                 "last_dari":         str(r["last_dari"])    if r["last_dari"]    else None,
                 "last_vald":         str(r["last_vald"])    if r["last_vald"]    else None,
                 "last_armcare":      str(r["last_armcare"]) if r["last_armcare"] else None,
+                "last_inbody":       str(r["last_inbody"])  if r.get("last_inbody") else None,
             })
         return {"roster": result, "unlinked_counts": unlinked}
     except Exception as exc:
