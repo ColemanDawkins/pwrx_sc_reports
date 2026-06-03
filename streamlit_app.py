@@ -44,10 +44,11 @@ with tab1:
             selected     = st.selectbox("Select athlete", player_names)
             match        = next((r for r in active if r["full_name"] == selected), None)
             if match:
-                cols = st.columns(3)
-                cols[0].metric("Dari sessions",    match["dari_sessions"])
-                cols[1].metric("Vald sessions",    match["vald_sessions"])
-                cols[2].metric("ArmCare sessions", match["armcare_sessions"])
+                cols = st.columns(4)
+                cols[0].metric("Dari",    match["dari_sessions"])
+                cols[1].metric("Vald",    match["vald_sessions"])
+                cols[2].metric("ArmCare", match["armcare_sessions"])
+                cols[3].metric("InBody",  match.get("inbody_records", 0))
 
             if st.button("Generate Report", type="primary"):
                 with st.spinner("Generating report... ~30 seconds"):

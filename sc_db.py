@@ -1182,12 +1182,6 @@ def ingest_file(path: str, table: str, verbose: bool = True) -> dict:
                           .astype(str)
                           .str.strip("<>")
                           .str.replace(r"[^0-9]", "", regex=True))
-        # Parse InBody date format MM.DD.YYYY HH:MM:SS -> DATE
-        date_col = next((c for c in ["test_date", "Test Date / Time"] if c in df.columns), None)
-        if date_col:
-            df[date_col] = pd.to_datetime(
-                df[date_col], format="%m.%d.%Y %H:%M:%S", errors="coerce"
-            ).dt.strftime("%Y-%m-%d")
 
     # Pre-rename ambiguous columns before alias matching
     # Both Vald and ArmCare have a "Time" column that maps to different DB columns
@@ -1201,6 +1195,16 @@ def ingest_file(path: str, table: str, verbose: bool = True) -> dict:
     if table == "inbody":
         import re
         df.columns = [c.split(". ", 1)[-1] if ". " in c and c.split(". ", 1)[0].isdigit() else c for c in df.columns]
+        # Parse InBody date format MM.DD.YYYY HH:MM:SS -> DATE (must happen after prefix strip)
+        if "Test Date / Time" in df.columns:
+            df["test_date"] = pd.to_datetime(
+                df["Test Date / Time"], format="%m.%d.%Y %H:%M:%S", errors="coerce"
+            ).dt.strftime("%Y-%m-%d")
+            df = df.drop(columns=["Test Date / Time"])
+        elif "test_date" in df.columns:
+            df["test_date"] = pd.to_datetime(
+                df["test_date"], format="%m.%d.%Y %H:%M:%S", errors="coerce"
+            ).dt.strftime("%Y-%m-%d")
 
     # Map columns
     df, col_warnings = _map_columns(df)
