@@ -1182,6 +1182,12 @@ def ingest_file(path: str, table: str, verbose: bool = True) -> dict:
                           .astype(str)
                           .str.strip("<>")
                           .str.replace(r"[^0-9]", "", regex=True))
+        # Parse InBody date format MM.DD.YYYY HH:MM:SS -> DATE
+        date_col = next((c for c in ["test_date", "Test Date / Time"] if c in df.columns), None)
+        if date_col:
+            df[date_col] = pd.to_datetime(
+                df[date_col], format="%m.%d.%Y %H:%M:%S", errors="coerce"
+            ).dt.strftime("%Y-%m-%d")
 
     # Pre-rename ambiguous columns before alias matching
     # Both Vald and ArmCare have a "Time" column that maps to different DB columns
