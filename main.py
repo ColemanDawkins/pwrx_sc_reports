@@ -35,7 +35,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-VALID_TABLES = ["master_uid", "pushpress", "dari_motion", "armcare", "vald_performance"]
+VALID_TABLES = ["master_uid", "pushpress", "dari_motion", "armcare", "vald_performance", "inbody"]
 
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
