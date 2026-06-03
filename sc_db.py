@@ -287,7 +287,7 @@ CREATE TABLE IF NOT EXISTS inbody (
     inbody_uid                  TEXT,
     test_date                   DATE,
     test_time                   TEXT,
-    height                      NUMERIC,
+    height                      TEXT,    -- stored as exported e.g. "5ft. 09.0in."
     gender                      TEXT,
     age                         INTEGER,
     weight                      NUMERIC,
@@ -355,7 +355,7 @@ CREATE TABLE IF NOT EXISTS inbody (
     bfm_control                 NUMERIC,
     ffm_control                 NUMERIC,
     bmr                         NUMERIC,
-    vfl                         NUMERIC,
+    vfl                         TEXT,    -- InBody exports as "level 1", "level 2" etc
     ac                          NUMERIC,
     ffmi                        NUMERIC,
     fmi                         NUMERIC,
@@ -458,7 +458,7 @@ COLUMN_ALIASES = {
     "dari_id":      ["dari_id", "meta__person__unique_id", "DariID"],
     "armcare_id":   ["armcare_id", "ArmCare ID", "armcareid", "ArmCareID"],
     "vald_id":      ["vald_id", "ExternalId", "externalid", "ValdID"],
-    "inbody_uid":   ["inbody_uid", "InBodyID", "inbody_id", "InBody ID"],  # ID col = full athlete name in InBody exports
+    "inbody_uid":   ["inbody_uid", "InBodyID", "inbody_id", "InBody ID", "ID"],  # InBody phone number ID
     # inbody
     "test_date":            ["Test Date / Time", "test_date", "Date"],
     "height":               ["Height", "height"],
@@ -1105,15 +1105,14 @@ def _link_master_uid(df: pd.DataFrame, table: str, conn) -> pd.DataFrame:
 
     # ── Pass 2: name-based match for anything still unlinked ──────────────────
     unlinked = df["master_uid"].isna().sum()
-    if unlinked > 0:
+    if unlinked > 0 and table != "inbody":
         cur.execute("SELECT LOWER(TRIM(full_name)), master_uid FROM master_uid")
         name_lookup = {row[0]: row[1] for row in cur.fetchall()}
 
         # Detect which column holds the athlete name in this file
         # Note: for dari_motion, 'name' is the session type — use first_name+last_name
-        # Note: for inbody, inbody_uid holds the full name
         name_col = next(
-            (c for c in ["full_name", "athlete_name", "inbody_uid"] if c in df.columns),
+            (c for c in ["full_name", "athlete_name"] if c in df.columns),
             None
         )
         # For tables with separate first/last name columns (dari, armcare), build combined key
@@ -1131,6 +1130,10 @@ def _link_master_uid(df: pd.DataFrame, table: str, conn) -> pd.DataFrame:
         if still_unlinked > 0:
             df = df[df["master_uid"].notna()].reset_index(drop=True)
             print(f"  Dropped {still_unlinked} rows with no master_uid match — not in master table")
+
+    elif table == "inbody" and unlinked > 0:
+        # InBody links via phone — allow unlinked rows through, backfill after insert
+        print(f"  Pass 2: InBody uses phone matching — {unlinked} rows will be linked after insert")
 
     cur.close()
     return df
@@ -1171,10 +1174,12 @@ def ingest_file(path: str, table: str, verbose: bool = True) -> dict:
     df = df.apply(lambda col: col.str.strip() if col.dtype == "object" else col)
 
     # Strip <> and normalize phone number from InBody ID column
+    # Note: column prefix stripping happens later for inbody, so check both forms
     if table == "inbody":
-        id_col = "inbody_uid" if "inbody_uid" in df.columns else ("ID" if "ID" in df.columns else None)
+        id_col = next((c for c in ["inbody_uid", "ID"] if c in df.columns), None)
         if id_col:
             df[id_col] = (df[id_col]
+                          .astype(str)
                           .str.strip("<>")
                           .str.replace(r"[^0-9]", "", regex=True))
 
@@ -1184,6 +1189,12 @@ def ingest_file(path: str, table: str, verbose: bool = True) -> dict:
         df = df.rename(columns={"Time": "test_time"})
     elif table == "armcare" and "Time" in df.columns:
         df = df.rename(columns={"Time": "exam_time"})
+
+    # InBody exports prefix every column with a number e.g. "1. ID", "2. Height"
+    # Strip the prefix so alias matching works correctly
+    if table == "inbody":
+        import re
+        df.columns = [c.split(". ", 1)[-1] if ". " in c and c.split(". ", 1)[0].isdigit() else c for c in df.columns]
 
     # Map columns
     df, col_warnings = _map_columns(df)
@@ -1224,10 +1235,13 @@ def ingest_file(path: str, table: str, verbose: bool = True) -> dict:
             else:
                 sql = f"INSERT INTO {table} ({col_list}) VALUES ({placeholders})"
 
+            cur.execute("SAVEPOINT row_insert")
             cur.execute(sql, values)
+            cur.execute("RELEASE SAVEPOINT row_insert")
             inserted += 1
 
         except Exception as exc:
+            cur.execute("ROLLBACK TO SAVEPOINT row_insert")
             skipped += 1
             if verbose:
                 print(f"  Row skipped: {exc}")
