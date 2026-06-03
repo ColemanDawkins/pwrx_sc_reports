@@ -328,11 +328,20 @@ with tab4:
 
     if roster_data2:
         df = pd.DataFrame(roster_data2)
-        df = df[["full_name", "dari_sessions", "vald_sessions",
-                 "armcare_sessions", "pushpress_records",
-                 "last_dari", "last_vald", "last_armcare"]]
-        df.columns = ["Athlete", "Dari", "Vald", "ArmCare",
-                      "PushPress", "Last Dari", "Last Vald", "Last ArmCare"]
+        available_cols = [c for c in [
+            "full_name", "dari_sessions", "vald_sessions",
+            "armcare_sessions", "inbody_records",
+            "last_dari", "last_vald", "last_armcare", "last_inbody"
+        ] if c in df.columns]
+        df = df[available_cols]
+        col_rename = {
+            "full_name": "Athlete", "dari_sessions": "Dari",
+            "vald_sessions": "Vald", "armcare_sessions": "ArmCare",
+            "inbody_records": "InBody",
+            "last_dari": "Last Dari", "last_vald": "Last Vald",
+            "last_armcare": "Last ArmCare", "last_inbody": "Last InBody"
+        }
+        df.columns = [col_rename.get(c, c) for c in df.columns]
         st.dataframe(df, use_container_width=True, hide_index=True)
         st.caption(f"{len(roster_data2)} athletes in database")
     else:
