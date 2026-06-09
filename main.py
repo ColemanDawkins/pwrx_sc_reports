@@ -220,13 +220,15 @@ async def ingest(
         unlinked     = get_unlinked_names(table) if table != "master_uid" else []
 
         return {
-            "status":          "success",
-            "table":           table,
-            "inserted":        int(result["inserted"]),
-            "skipped":         int(result["skipped"]),
-            "flagged":         int(result["flagged"]),
-            "warnings":        result["warnings"],
-            "unlinked_names":  unlinked,
+            "status":           "success",
+            "table":            table,
+            "inserted":         int(result["inserted"]),
+            "skipped":          int(result["skipped"]),
+            "unmatched":        int(result.get("unmatched", 0)),
+            "unmatched_names":  result.get("unmatched_names", []),
+            "flagged":          int(result["flagged"]),
+            "warnings":         result["warnings"],
+            "unlinked_names":   unlinked,
         }
 
     except Exception as exc:

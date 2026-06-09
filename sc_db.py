@@ -1049,16 +1049,18 @@ def _safe_val(val):
     return val
 
 
-def _link_master_uid(df: pd.DataFrame, table: str, conn) -> pd.DataFrame:
+def _link_master_uid(df: pd.DataFrame, table: str, conn) -> tuple:
     """
     Try to populate master_uid column. Two-pass approach:
       Pass 1 — match on source-specific ID (dari_id, armcare_id, vald_id, pushpress_id)
       Pass 2 — fall back to full name match for any rows still unlinked
 
     If master_uid already present in file, leave as-is.
+
+    Returns: (df, unmatched_count, unmatched_names)
     """
     if "master_uid" in df.columns and df["master_uid"].notna().any():
-        return df
+        return df, 0, []
 
     cur = conn.cursor()
 
@@ -1128,15 +1130,36 @@ def _link_master_uid(df: pd.DataFrame, table: str, conn) -> pd.DataFrame:
         still_unlinked = df["master_uid"].isna().sum()
         print(f"  Pass 2 (name match): linked {linked_name} more rows")
         if still_unlinked > 0:
+            # Collect unmatched athlete names before dropping
+            unmatched_mask = df["master_uid"].isna()
+            if "first_name" in df.columns and "last_name" in df.columns:
+                unmatched_names = (
+                    df.loc[unmatched_mask, "first_name"].fillna("") + " " +
+                    df.loc[unmatched_mask, "last_name"].fillna("")
+                ).str.strip().tolist()
+            elif "athlete_name" in df.columns:
+                unmatched_names = df.loc[unmatched_mask, "athlete_name"].tolist()
+            elif "full_name" in df.columns:
+                unmatched_names = df.loc[unmatched_mask, "full_name"].tolist()
+            else:
+                unmatched_names = [f"row_{i}" for i in df[unmatched_mask].index]
+
             df = df[df["master_uid"].notna()].reset_index(drop=True)
-            print(f"  Dropped {still_unlinked} rows with no master_uid match — not in master table")
+            print(f"  Dropped {still_unlinked} rows — athlete not found in master_uid table")
+            for name in sorted(set(unmatched_names)):
+                print(f"    - {name}")
+        else:
+            unmatched_names = []
+
+        cur.close()
+        return df, still_unlinked, unmatched_names
 
     elif table == "inbody" and unlinked > 0:
         # InBody links via phone — allow unlinked rows through, backfill after insert
         print(f"  Pass 2: InBody uses phone matching — {unlinked} rows will be linked after insert")
 
     cur.close()
-    return df
+    return df, 0, []
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1217,8 +1240,10 @@ def ingest_file(path: str, table: str, verbose: bool = True) -> dict:
     conn = get_conn()
 
     # Try to auto-link master_uid
+    unmatched = 0
+    unmatched_names: list[str] = []
     if table != "master_uid":
-        df = _link_master_uid(df, table, conn)
+        df, unmatched, unmatched_names = _link_master_uid(df, table, conn)
 
     inserted = skipped = flagged = 0
     unique_key = TABLE_UNIQUE_KEY.get(table)
@@ -1278,7 +1303,9 @@ def ingest_file(path: str, table: str, verbose: bool = True) -> dict:
             if verbose:
                 print(f"  Backfill warning: {bf_err}")
 
-    return {"inserted": inserted, "skipped": skipped, "flagged": flagged, "warnings": warnings}
+    return {"inserted": inserted, "skipped": skipped, "flagged": flagged,
+            "unmatched": unmatched, "unmatched_names": unmatched_names,
+            "warnings": warnings}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
