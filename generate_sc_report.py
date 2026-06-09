@@ -1249,10 +1249,10 @@ html,body{background:var(--bg);color:#E8F0F8;font-family:'Barlow Condensed',sans
         </div>
         <div class="dari-scores">
           <div class="lbl">Athleticism Scores</div>
-          <div class="sr"><div class="sn">Athleticism</div><div class="sb"><div class="sbf" style="width:{{ dari.current.athleticism }}%;background:var(--dari);"></div></div><div class="sv" style="color:var(--dari);">{{ dari.current.athleticism }}</div></div>
-          <div class="sr"><div class="sn">Functionality</div><div class="sb"><div class="sbf" style="width:{{ dari.current.functionality }}%;background:var(--dari);"></div></div><div class="sv" style="color:var(--dari);">{{ dari.current.functionality }}</div></div>
-          <div class="sr"><div class="sn">Explosiveness</div><div class="sb"><div class="sbf" style="width:{{ dari.current.explosiveness }}%;background:var(--dari);"></div></div><div class="sv" style="color:var(--dari);">{{ dari.current.explosiveness }}</div></div>
-          <div class="sr"><div class="sn">Dysfunction</div><div class="sb"><div class="sbf" style="width:{{ dari.current.dysfunction * 10 }}%;background:#ef4444;"></div></div><div class="sv" style="color:#ef4444;">{{ dari.current.dysfunction }}</div></div>
+          <div class="sr"><div class="sn">Athleticism</div><div class="sb"><div class="sbf" style="width:{{ dari.current.athleticism }}%;background:var(--dari);"></div></div><div class="sv" style="color:var(--dari);">{{ dari.current.athleticism }}</div>{% if dari_prev.athleticism is defined %}{{ chip(dari.current.athleticism, dari_prev.athleticism)|safe }}{% endif %}</div>
+          <div class="sr"><div class="sn">Functionality</div><div class="sb"><div class="sbf" style="width:{{ dari.current.functionality }}%;background:var(--dari);"></div></div><div class="sv" style="color:var(--dari);">{{ dari.current.functionality }}</div>{% if dari_prev.functionality is defined %}{{ chip(dari.current.functionality, dari_prev.functionality)|safe }}{% endif %}</div>
+          <div class="sr"><div class="sn">Explosiveness</div><div class="sb"><div class="sbf" style="width:{{ dari.current.explosiveness }}%;background:var(--dari);"></div></div><div class="sv" style="color:var(--dari);">{{ dari.current.explosiveness }}</div>{% if dari_prev.explosiveness is defined %}{{ chip(dari.current.explosiveness, dari_prev.explosiveness)|safe }}{% endif %}</div>
+          <div class="sr"><div class="sn">Dysfunction</div><div class="sb"><div class="sbf" style="width:{{ dari.current.dysfunction * 10 }}%;background:#ef4444;"></div></div><div class="sv" style="color:#ef4444;">{{ dari.current.dysfunction }}</div>{% if dari_prev.dysfunction is defined %}{{ chip(dari.current.dysfunction, dari_prev.dysfunction, invert=True)|safe }}{% endif %}</div>
           <div class="div"></div>
           <div class="lbl">Vertical Jump (Dari)</div>
           <div style="display:flex;align-items:flex-end;gap:4px;">
@@ -1269,9 +1269,9 @@ html,body{background:var(--bg);color:#E8F0F8;font-family:'Barlow Condensed',sans
     <div class="card-hdr vald"><img src="{{ vald_logo }}" style="height:20px;width:auto;"/></div>
     <div class="card-body">
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;">
-        <div class="num-card vald"><div class="nv lg">{{ vald.current.jump_height }}</div><div class="nl">Jump Height (in)</div></div>
-        <div class="num-card vald"><div class="nv lg">{{ vald.current.rsi_mod }}</div><div class="nl">RSI-Modified</div></div>
-        <div class="num-card vald"><div class="nv lg">{{ "{:,.0f}".format(vald.current.peak_power) }}</div><div class="nl">Peak Power (W)</div></div>
+        <div class="num-card vald"><div class="nv lg">{{ vald.current.jump_height }}</div><div class="nl">Jump Height (in)</div>{% if vald.prev %}{{ chip(vald.current.jump_height, vald.prev.jump_height)|safe }}{% endif %}</div>
+        <div class="num-card vald"><div class="nv lg">{{ vald.current.rsi_mod }}</div><div class="nl">RSI-Modified</div>{% if vald.prev %}{{ chip(vald.current.rsi_mod, vald.prev.rsi_mod)|safe }}{% endif %}</div>
+        <div class="num-card vald"><div class="nv lg">{{ "{:,.0f}".format(vald.current.peak_power) }}</div><div class="nl">Peak Power (W)</div>{% if vald.prev %}{{ chip(vald.current.peak_power, vald.prev.peak_power)|safe }}{% endif %}</div>
       </div>
       <div class="div"></div>
       <div class="lbl">Relative Performance</div>
@@ -1286,14 +1286,14 @@ html,body{background:var(--bg);color:#E8F0F8;font-family:'Barlow Condensed',sans
     <div class="card-hdr arm"><img src="{{ armcare_logo }}" style="height:26px;width:auto;border-radius:3px;"/></div>
     <div class="card-body">
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
-        <div class="num-card arm"><div class="nv lg">{{ arm.current.arm_score }}</div><div class="nl">Arm Score</div></div>
-        <div class="num-card arm"><div class="nv lg">{{ arm.current.total_strength }}<span class="nu"> lbs</span></div><div class="nl">Total Strength</div></div>
+        <div class="num-card arm"><div class="nv lg">{{ arm.current.arm_score }}</div><div class="nl">Arm Score</div>{% if arm.prev %}{{ chip(arm.current.arm_score, arm.prev.arm_score)|safe }}{% endif %}</div>
+        <div class="num-card arm"><div class="nv lg">{{ arm.current.total_strength }}<span class="nu"> lbs</span></div><div class="nl">Total Strength</div>{% if arm.prev %}{{ chip(arm.current.total_strength, arm.prev.total_strength)|safe }}{% endif %}</div>
       </div>
       <div class="div"></div>
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;">
         <div class="num-card arm"><div class="nv sm">{{ arm.current.velo or "—" }}</div><div class="nl">Velo (mph)</div></div>
-        <div class="num-card arm"><div class="nv sm">{{ arm.current.balance }}</div><div class="nl">Balance</div></div>
-        <div class="num-card arm"><div class="nv sm">{{ arm.current.svr }}</div><div class="nl">SVR</div></div>
+        <div class="num-card arm"><div class="nv sm">{{ arm.current.balance }}</div><div class="nl">Balance</div>{% if arm.prev %}{{ chip(arm.current.balance, arm.prev.balance)|safe }}{% endif %}</div>
+        <div class="num-card arm"><div class="nv sm">{{ arm.current.svr }}</div><div class="nl">SVR</div>{% if arm.prev %}{{ chip(arm.current.svr, arm.prev.svr)|safe }}{% endif %}</div>
       </div>
     </div>
   </div>
@@ -1304,15 +1304,15 @@ html,body{background:var(--bg);color:#E8F0F8;font-family:'Barlow Condensed',sans
     <div class="card-body">
       {% if inbody.available %}
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
-        <div class="num-card inbody"><div class="nv lg">{{ inbody.score }}<span class="nu">/100</span></div><div class="nl">InBody Score</div></div>
-        <div class="num-card inbody"><div class="nv lg">{{ inbody.weight_lbs }}<span class="nu"> lbs</span></div><div class="nl">Body Weight</div></div>
+        <div class="num-card inbody"><div class="nv lg">{{ inbody.score }}<span class="nu">/100</span></div><div class="nl">InBody Score</div>{% if inbody_prev.score is defined %}{{ chip(inbody.score, inbody_prev.score)|safe }}{% endif %}</div>
+        <div class="num-card inbody"><div class="nv lg">{{ inbody.weight_lbs }}<span class="nu"> lbs</span></div><div class="nl">Body Weight</div>{% if inbody_prev.weight_lbs is defined %}{{ chip(inbody.weight_lbs, inbody_prev.weight_lbs)|safe }}{% endif %}</div>
       </div>
       <div class="div"></div>
       <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;">
-        <div class="num-card inbody"><div class="nv sm">{{ inbody.smm_lbs }}</div><div class="nl">SMM (lbs)</div></div>
-        <div class="num-card inbody"><div class="nv sm">{{ inbody.pbf }}%</div><div class="nl">Body Fat</div></div>
-        <div class="num-card inbody"><div class="nv sm">{{ inbody.bmr }}</div><div class="nl">BMR kcal</div></div>
-        <div class="num-card inbody"><div class="nv sm">{{ inbody.phase_angle }}°</div><div class="nl">Phase Angle</div></div>
+        <div class="num-card inbody"><div class="nv sm">{{ inbody.smm_lbs }}</div><div class="nl">SMM (lbs)</div>{% if inbody_prev.smm_lbs is defined %}{{ chip(inbody.smm_lbs, inbody_prev.smm_lbs)|safe }}{% endif %}</div>
+        <div class="num-card inbody"><div class="nv sm">{{ inbody.pbf }}%</div><div class="nl">Body Fat</div>{% if inbody_prev.pbf is defined %}{{ chip(inbody.pbf, inbody_prev.pbf, invert=True)|safe }}{% endif %}</div>
+        <div class="num-card inbody"><div class="nv sm">{{ inbody.bmr }}</div><div class="nl">BMR kcal</div>{% if inbody_prev.bmr is defined %}{{ chip(inbody.bmr, inbody_prev.bmr)|safe }}{% endif %}</div>
+        <div class="num-card inbody"><div class="nv sm">{{ inbody.phase_angle }}°</div><div class="nl">Phase Angle</div>{% if inbody_prev.phase_angle is defined %}{{ chip(inbody.phase_angle, inbody_prev.phase_angle)|safe }}{% endif %}</div>
       </div>
       {% else %}
       <div style="color:var(--muted);font-size:12px;margin:auto;text-align:center;">No InBody data available</div>
@@ -1431,6 +1431,13 @@ def render_report(data: dict, out_path: str):
     env = Environment(loader=BaseLoader())
     template = env.from_string(TEMPLATE)
 
+    dari_trend = data["dari"]["trend"]
+    dari_prev = dari_trend[-2] if len(dari_trend) >= 2 else {}
+    inbody_trend = (data.get("inbody") or {}).get("trend") or []
+    inbody_prev = inbody_trend[-2] if len(inbody_trend) >= 2 else {}
+
+    env.globals["chip"] = chip
+
     html = template.render(
         athlete_name   = data["athlete_name"],
         report_date    = data["report_date"],
@@ -1441,9 +1448,11 @@ def render_report(data: dict, out_path: str):
         inbody_logo    = INBODY_LOGO,
         body_img       = BODY_IMG,
         dari           = data["dari"],
+        dari_prev      = dari_prev,
         vald           = data["vald"],
         arm            = data["arm"],
         inbody         = data["inbody"],
+        inbody_prev    = inbody_prev,
         body_scan_dots = build_body_scan_dots(data),
         decline_flags  = build_decline_flags(data),
         # page 2 charts
