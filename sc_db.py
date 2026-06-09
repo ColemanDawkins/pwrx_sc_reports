@@ -1472,7 +1472,13 @@ def load_athlete_data(athlete_name: str) -> dict:
         SELECT session_ts, score_overall, score_function, score_explosive,
                score_dysfunction, score_vulnerability,
                focus_0_name, focus_0_score, focus_1_name, focus_1_score,
-               focus_2_name, focus_2_score
+               focus_2_name, focus_2_score,
+               dp7_jump_height,
+               short_vulnerability, sholt_vulnerability,
+               spnup_vulnerability, spnlo_vulnerability,
+               hiprt_vulnerability, hiplt_vulnerability,
+               knert_vulnerability, knelt_vulnerability,
+               ankrt_vulnerability, anklt_vulnerability
         FROM dari_motion
         WHERE master_uid = %s
           AND session_ts IS NOT NULL
@@ -1628,6 +1634,19 @@ def load_athlete_data(athlete_name: str) -> dict:
             },
             "focus_areas":          current_focus,
             "focus_areas_enriched": focus_areas_enriched,
+            "joints": {
+                "r_shoulder":  round(_safe_float(last_dari.get("short_vulnerability")), 1),
+                "l_shoulder":  round(_safe_float(last_dari.get("sholt_vulnerability")), 1),
+                "upper_spine": round(_safe_float(last_dari.get("spnup_vulnerability")), 1),
+                "lower_spine": round(_safe_float(last_dari.get("spnlo_vulnerability")), 1),
+                "r_hip":       round(_safe_float(last_dari.get("hiprt_vulnerability")), 1),
+                "l_hip":       round(_safe_float(last_dari.get("hiplt_vulnerability")), 1),
+                "r_knee":      round(_safe_float(last_dari.get("knert_vulnerability")), 1),
+                "l_knee":      round(_safe_float(last_dari.get("knelt_vulnerability")), 1),
+                "r_ankle":     round(_safe_float(last_dari.get("ankrt_vulnerability")), 1),
+                "l_ankle":     round(_safe_float(last_dari.get("anklt_vulnerability")), 1),
+            },
+            "vj": round(_safe_float(last_dari.get("dp7_jump_height")), 1),
         },
         "vald": {
             "trend":   vald_trend,
