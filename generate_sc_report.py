@@ -1181,6 +1181,8 @@ html,body{background:var(--bg);color:#E8F0F8;font-family:'Barlow Condensed',sans
   .hdr{height:auto;padding:10px 14px;flex-wrap:wrap;gap:4px;}
   .dari-layout{flex-direction:column;}
   .dari-scan-wrap{height:280px;width:100%;}
+  .card-body{overflow:visible;}
+  .dari-scores{width:100%;padding-top:8px;}
 }
 .card{background:var(--panel);border-radius:10px;overflow:hidden;display:flex;flex-direction:column;border:1px solid var(--border);}
 .card-hdr{display:flex;align-items:center;padding:0 14px;height:48px;border-bottom:2px solid;flex-shrink:0;}
@@ -1253,12 +1255,7 @@ html,body{background:var(--bg);color:#E8F0F8;font-family:'Barlow Condensed',sans
           <div class="sr"><div class="sn">Functionality</div><div class="sb"><div class="sbf" style="width:{{ dari.current.functionality }}%;background:var(--dari);"></div></div><div class="sv" style="color:var(--dari);">{{ dari.current.functionality }}</div>{% if dari_prev.functionality is defined %}{{ chip(dari.current.functionality, dari_prev.functionality)|safe }}{% endif %}</div>
           <div class="sr"><div class="sn">Explosiveness</div><div class="sb"><div class="sbf" style="width:{{ dari.current.explosiveness }}%;background:var(--dari);"></div></div><div class="sv" style="color:var(--dari);">{{ dari.current.explosiveness }}</div>{% if dari_prev.explosiveness is defined %}{{ chip(dari.current.explosiveness, dari_prev.explosiveness)|safe }}{% endif %}</div>
           <div class="sr"><div class="sn">Dysfunction</div><div class="sb"><div class="sbf" style="width:{{ dari.current.dysfunction * 10 }}%;background:#ef4444;"></div></div><div class="sv" style="color:#ef4444;">{{ dari.current.dysfunction }}</div>{% if dari_prev.dysfunction is defined %}{{ chip(dari.current.dysfunction, dari_prev.dysfunction, invert=True)|safe }}{% endif %}</div>
-          <div class="div"></div>
-          <div class="lbl">Vertical Jump (Dari)</div>
-          <div style="display:flex;align-items:flex-end;gap:4px;">
-            <span style="font-family:'Bebas Neue',sans-serif;font-size:56px;line-height:1;color:var(--dari);">{{ dari.vj }}</span>
-            <span style="font-size:13px;color:var(--muted);margin-bottom:10px;">IN</span>
-          </div>
+
         </div>
       </div>
     </div>
