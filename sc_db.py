@@ -1083,18 +1083,20 @@ def _link_master_uid(df: pd.DataFrame, table: str, conn) -> pd.DataFrame:
         id_col = "inbody_uid" if "inbody_uid" in df.columns else None
         if id_col:
             # Build phone -> master_uid lookup from pushpress table
-            # Normalize both sides: strip all non-digits
+            # Join through master_uid table so we catch pushpress rows linked via name
+            # even if pushpress.master_uid column itself is not yet populated
             cur.execute("""
                 SELECT REGEXP_REPLACE(p.phone, '[^0-9]', '', 'g') AS phone_clean,
-                       p.master_uid
+                       COALESCE(p.master_uid, m.master_uid) AS master_uid
                 FROM pushpress p
-                WHERE p.phone IS NOT NULL AND p.master_uid IS NOT NULL
+                LEFT JOIN master_uid m
+                       ON LOWER(TRIM(m.full_name)) = LOWER(TRIM(p.first_name || ' ' || p.last_name))
+                WHERE p.phone IS NOT NULL
+                  AND COALESCE(p.master_uid, m.master_uid) IS NOT NULL
             """)
-            phone_lookup = {row[0]: row[1] for row in cur.fetchall()}
-            # Normalize inbody phone column
-            df["_phone_clean"] = df[id_col].str.replace(r"[^0-9]", "", regex=True)
-            df["master_uid"] = df["_phone_clean"].map(phone_lookup)
-            df = df.drop(columns=["_phone_clean"])
+            phone_lookup = {row[0]: row[1] for row in cur.fetchall() if row[0]}
+            # inbody_uid is already digits-only after _map_columns strip
+            df["master_uid"] = df[id_col].map(phone_lookup)
             linked_id = df["master_uid"].notna().sum()
             print(f"  Pass 1 (phone match): linked {linked_id}/{len(df)} rows via phone → pushpress")
         else:
@@ -1173,16 +1175,6 @@ def ingest_file(path: str, table: str, verbose: bool = True) -> dict:
     # Strip whitespace from all string columns
     df = df.apply(lambda col: col.str.strip() if col.dtype == "object" else col)
 
-    # Strip <> and normalize phone number from InBody ID column
-    # Note: column prefix stripping happens later for inbody, so check both forms
-    if table == "inbody":
-        id_col = next((c for c in ["inbody_uid", "ID"] if c in df.columns), None)
-        if id_col:
-            df[id_col] = (df[id_col]
-                          .astype(str)
-                          .str.strip("<>")
-                          .str.replace(r"[^0-9]", "", regex=True))
-
     # Pre-rename ambiguous columns before alias matching
     # Both Vald and ArmCare have a "Time" column that maps to different DB columns
     if table == "vald_performance" and "Time" in df.columns:
@@ -1209,6 +1201,14 @@ def ingest_file(path: str, table: str, verbose: bool = True) -> dict:
     # Map columns
     df, col_warnings = _map_columns(df)
     warnings.extend(col_warnings)
+
+    # Strip everything except digits from inbody_uid (stored as <7779992222> in exports)
+    # This must run after _map_columns so the column is guaranteed to be named inbody_uid
+    if table == "inbody" and "inbody_uid" in df.columns:
+        df["inbody_uid"] = (df["inbody_uid"]
+                             .astype(str)
+                             .str.replace(r"[^0-9]", "", regex=True)
+                             .replace("", None))
 
     cols = TABLE_COLUMNS.get(table)
     if not cols:
@@ -1669,88 +1669,6 @@ def load_athlete_data(athlete_name: str) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PHONE SYNC  (reconcile InBody phone list against pushpress)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def sync_inbody_phones(records: list[dict]) -> dict:
-    """
-    Reconcile a list of {name, phone} records (from InBody export) against
-    the pushpress table. Three outcomes per record:
-
-      not_found     -- name does not exist in pushpress at all
-      phone_added   -- name found but had no phone; phone written to DB
-      phone_updated -- name found with a different phone; DB updated to new number
-
-    Name matching is case-insensitive on (first_name + last_name).
-    Phone comparison strips all non-digit characters before comparing.
-
-    Args:
-        records: list of dicts with keys "name" (full name) and "phone" (raw string)
-
-    Returns:
-        {
-            "not_found":     [{"name": ..., "phone": ...}, ...],
-            "phone_added":   [{"name": ..., "phone_new": ...}, ...],
-            "phone_updated": [{"name": ..., "phone_old": ..., "phone_new": ...}, ...],
-        }
-    """
-    import re
-
-    def _strip(p):
-        return re.sub(r"[^0-9]", "", str(p)) if p else ""
-
-    conn = get_conn()
-    cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-
-    log = {"not_found": [], "phone_added": [], "phone_updated": []}
-
-    for rec in records:
-        raw_name  = (rec.get("name") or "").strip()
-        raw_phone = (rec.get("phone") or "").strip()
-
-        if not raw_name:
-            continue
-
-        parts = raw_name.split(None, 1)
-        first = parts[0] if parts else ""
-        last  = parts[1] if len(parts) > 1 else ""
-
-        cur.execute("""
-            SELECT id, first_name, last_name, phone
-            FROM pushpress
-            WHERE LOWER(first_name) = LOWER(%s)
-              AND LOWER(last_name)  = LOWER(%s)
-            LIMIT 1
-        """, (first, last))
-        row = cur.fetchone()
-
-        if not row:
-            log["not_found"].append({"name": raw_name, "phone": raw_phone})
-            continue
-
-        existing_stripped = _strip(row["phone"])
-        new_stripped      = _strip(raw_phone)
-
-        if not existing_stripped:
-            cur.execute("UPDATE pushpress SET phone = %s WHERE id = %s", (raw_phone, row["id"]))
-            conn.commit()
-            log["phone_added"].append({"name": raw_name, "phone_new": raw_phone})
-
-        elif existing_stripped != new_stripped:
-            cur.execute("UPDATE pushpress SET phone = %s WHERE id = %s", (raw_phone, row["id"]))
-            conn.commit()
-            log["phone_updated"].append({
-                "name":      raw_name,
-                "phone_old": row["phone"],
-                "phone_new": raw_phone,
-            })
-
-    cur.close()
-    conn.close()
-    return log
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # ATHLETE MANAGEMENT  (PWRX ID generation, creation, back-fill linking)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1891,12 +1809,14 @@ def backfill_links(table: str = None) -> dict:
     if table is None or table == "inbody":
         cur.execute("""
             UPDATE inbody i
-            SET master_uid = p.master_uid
+            SET master_uid = COALESCE(p.master_uid, m.master_uid)
             FROM pushpress p
+            LEFT JOIN master_uid m
+                   ON LOWER(TRIM(m.full_name)) = LOWER(TRIM(p.first_name || ' ' || p.last_name))
             WHERE i.master_uid IS NULL
               AND REGEXP_REPLACE(i.inbody_uid, '[^0-9]', '', 'g') =
                   REGEXP_REPLACE(p.phone,      '[^0-9]', '', 'g')
-              AND p.master_uid IS NOT NULL
+              AND COALESCE(p.master_uid, m.master_uid) IS NOT NULL
               AND i.inbody_uid IS NOT NULL
               AND p.phone IS NOT NULL
         """)
