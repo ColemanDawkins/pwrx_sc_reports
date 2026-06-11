@@ -20,7 +20,7 @@ st.markdown(
 )
 st.markdown("---")
 
-tab1, tab2, tab3, tab4 = st.tabs(["Generate Report", "Upload Data", "Athletes", "Roster"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["Generate Report", "Upload Data", "Athletes", "Roster", "Sync Phones"])
 
 
 # ── TAB 1: Generate Report ────────────────────────────────────────────────────
@@ -347,6 +347,71 @@ with tab4:
         st.caption(f"{len(roster_data2)} athletes in database")
     else:
         st.info("No athletes in database yet.")
+
+
+
+# ── TAB 5: Sync Phones ────────────────────────────────────────────────────────
+with tab5:
+    st.markdown("### Sync Phone Numbers")
+    st.caption(
+        "Upload a CSV or Excel file with name and phone columns. "
+        "Matches against PushPress and adds or updates phone numbers where needed."
+    )
+
+    phone_file = st.file_uploader(
+        "Select file (must have name and phone columns)",
+        type=["csv", "xlsx", "xls"],
+        key="phone_sync"
+    )
+
+    if phone_file:
+        st.success(f"File loaded: {phone_file.name}")
+        if st.button("Run Phone Sync", type="primary"):
+            with st.spinner("Syncing phone numbers..."):
+                try:
+                    suffix = ".xlsx" if phone_file.name.endswith((".xlsx", ".xls")) else ".csv"
+                    mime   = ("application/vnd.openxmlformats-officedocument"
+                              ".spreadsheetml.sheet" if suffix == ".xlsx" else "text/csv")
+                    response = requests.post(
+                        API_URL + "/sync_phones",
+                        files={"file": (phone_file.name, phone_file.getvalue(), mime)},
+                        timeout=120
+                    )
+
+                    if response.status_code == 200:
+                        r = response.json()
+                        added   = r.get("phone_added_count", 0)
+                        updated = r.get("phone_updated_count", 0)
+                        missing = r.get("not_found_count", 0)
+
+                        col1, col2, col3 = st.columns(3)
+                        col1.metric("Phones Added",   added)
+                        col2.metric("Phones Updated", updated)
+                        col3.metric("Names Not Found", missing)
+
+                        if r.get("phone_added"):
+                            with st.expander(f"Phones added ({added})"):
+                                for rec in r["phone_added"]:
+                                    st.write(f"• **{rec['name']}** → {rec['phone_new']}")
+
+                        if r.get("phone_updated"):
+                            with st.expander(f"Phones updated ({updated})"):
+                                for rec in r["phone_updated"]:
+                                    st.write(
+                                        f"• **{rec['name']}** — "
+                                        f"{rec['phone_old']} → {rec['phone_new']}"
+                                    )
+
+                        if r.get("not_found"):
+                            with st.expander(f"Names not found in PushPress ({missing})"):
+                                for rec in r["not_found"]:
+                                    st.write(f"• **{rec['name']}** ({rec['phone']})")
+
+                    else:
+                        st.error("Error: " + response.text)
+
+                except Exception as exc:
+                    st.error("Connection error: " + str(exc))
 
 st.markdown("---")
 st.caption("PWRX · Strength & Conditioning Data Platform")

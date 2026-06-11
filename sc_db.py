@@ -1419,9 +1419,7 @@ def _map_inbody(rows: list) -> dict:
     return {
         "available":      True,
         "weight":         round(sf("weight"), 1),
-        "weight_lbs":     round(sf("weight"), 1),
         "smm":            round(sf("smm"), 1),
-        "smm_lbs":        round(sf("smm"), 1),
         "pbf":            round(sf("pbf"), 1),
         "bmi":            round(sf("bmi"), 1),
         "score":          int(sf("inbody_score")),
@@ -1668,6 +1666,88 @@ def load_athlete_data(athlete_name: str) -> dict:
             "inbody":  len(inbody_rows),
         },
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PHONE SYNC  (reconcile InBody phone list against pushpress)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def sync_inbody_phones(records: list[dict]) -> dict:
+    """
+    Reconcile a list of {name, phone} records (from InBody export) against
+    the pushpress table. Three outcomes per record:
+
+      not_found     -- name does not exist in pushpress at all
+      phone_added   -- name found but had no phone; phone written to DB
+      phone_updated -- name found with a different phone; DB updated to new number
+
+    Name matching is case-insensitive on (first_name + last_name).
+    Phone comparison strips all non-digit characters before comparing.
+
+    Args:
+        records: list of dicts with keys "name" (full name) and "phone" (raw string)
+
+    Returns:
+        {
+            "not_found":     [{"name": ..., "phone": ...}, ...],
+            "phone_added":   [{"name": ..., "phone_new": ...}, ...],
+            "phone_updated": [{"name": ..., "phone_old": ..., "phone_new": ...}, ...],
+        }
+    """
+    import re
+
+    def _strip(p):
+        return re.sub(r"[^0-9]", "", str(p)) if p else ""
+
+    conn = get_conn()
+    cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    log = {"not_found": [], "phone_added": [], "phone_updated": []}
+
+    for rec in records:
+        raw_name  = (rec.get("name") or "").strip()
+        raw_phone = (rec.get("phone") or "").strip()
+
+        if not raw_name:
+            continue
+
+        parts = raw_name.split(None, 1)
+        first = parts[0] if parts else ""
+        last  = parts[1] if len(parts) > 1 else ""
+
+        cur.execute("""
+            SELECT id, first_name, last_name, phone
+            FROM pushpress
+            WHERE LOWER(first_name) = LOWER(%s)
+              AND LOWER(last_name)  = LOWER(%s)
+            LIMIT 1
+        """, (first, last))
+        row = cur.fetchone()
+
+        if not row:
+            log["not_found"].append({"name": raw_name, "phone": raw_phone})
+            continue
+
+        existing_stripped = _strip(row["phone"])
+        new_stripped      = _strip(raw_phone)
+
+        if not existing_stripped:
+            cur.execute("UPDATE pushpress SET phone = %s WHERE id = %s", (raw_phone, row["id"]))
+            conn.commit()
+            log["phone_added"].append({"name": raw_name, "phone_new": raw_phone})
+
+        elif existing_stripped != new_stripped:
+            cur.execute("UPDATE pushpress SET phone = %s WHERE id = %s", (raw_phone, row["id"]))
+            conn.commit()
+            log["phone_updated"].append({
+                "name":      raw_name,
+                "phone_old": row["phone"],
+                "phone_new": raw_phone,
+            })
+
+    cur.close()
+    conn.close()
+    return log
 
 
 # ─────────────────────────────────────────────────────────────────────────────
