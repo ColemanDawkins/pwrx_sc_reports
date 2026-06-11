@@ -1083,20 +1083,18 @@ def _link_master_uid(df: pd.DataFrame, table: str, conn) -> pd.DataFrame:
         id_col = "inbody_uid" if "inbody_uid" in df.columns else None
         if id_col:
             # Build phone -> master_uid lookup from pushpress table
-            # Join through master_uid table so we catch pushpress rows linked via name
-            # even if pushpress.master_uid column itself is not yet populated
+            # Normalize both sides: strip all non-digits
             cur.execute("""
                 SELECT REGEXP_REPLACE(p.phone, '[^0-9]', '', 'g') AS phone_clean,
-                       COALESCE(p.master_uid, m.master_uid) AS master_uid
+                       p.master_uid
                 FROM pushpress p
-                LEFT JOIN master_uid m
-                       ON LOWER(TRIM(m.full_name)) = LOWER(TRIM(p.first_name || ' ' || p.last_name))
-                WHERE p.phone IS NOT NULL
-                  AND COALESCE(p.master_uid, m.master_uid) IS NOT NULL
+                WHERE p.phone IS NOT NULL AND p.master_uid IS NOT NULL
             """)
-            phone_lookup = {row[0]: row[1] for row in cur.fetchall() if row[0]}
-            # inbody_uid is already digits-only after _map_columns strip
-            df["master_uid"] = df[id_col].map(phone_lookup)
+            phone_lookup = {row[0]: row[1] for row in cur.fetchall()}
+            # Normalize inbody phone column
+            df["_phone_clean"] = df[id_col].str.replace(r"[^0-9]", "", regex=True)
+            df["master_uid"] = df["_phone_clean"].map(phone_lookup)
+            df = df.drop(columns=["_phone_clean"])
             linked_id = df["master_uid"].notna().sum()
             print(f"  Pass 1 (phone match): linked {linked_id}/{len(df)} rows via phone → pushpress")
         else:
@@ -1175,6 +1173,16 @@ def ingest_file(path: str, table: str, verbose: bool = True) -> dict:
     # Strip whitespace from all string columns
     df = df.apply(lambda col: col.str.strip() if col.dtype == "object" else col)
 
+    # Strip <> and normalize phone number from InBody ID column
+    # Check prefixed form first ("1. ID") since prefix strip happens later
+    if table == "inbody":
+        id_col = next((c for c in ["1. ID", "inbody_uid", "ID"] if c in df.columns), None)
+        if id_col:
+            df[id_col] = (df[id_col]
+                          .astype(str)
+                          .str.replace(r"[^0-9]", "", regex=True)
+                          .replace("", None))
+
     # Pre-rename ambiguous columns before alias matching
     # Both Vald and ArmCare have a "Time" column that maps to different DB columns
     if table == "vald_performance" and "Time" in df.columns:
@@ -1201,14 +1209,6 @@ def ingest_file(path: str, table: str, verbose: bool = True) -> dict:
     # Map columns
     df, col_warnings = _map_columns(df)
     warnings.extend(col_warnings)
-
-    # Strip everything except digits from inbody_uid (stored as <7779992222> in exports)
-    # This must run after _map_columns so the column is guaranteed to be named inbody_uid
-    if table == "inbody" and "inbody_uid" in df.columns:
-        df["inbody_uid"] = (df["inbody_uid"]
-                             .astype(str)
-                             .str.replace(r"[^0-9]", "", regex=True)
-                             .replace("", None))
 
     cols = TABLE_COLUMNS.get(table)
     if not cols:
@@ -1809,14 +1809,12 @@ def backfill_links(table: str = None) -> dict:
     if table is None or table == "inbody":
         cur.execute("""
             UPDATE inbody i
-            SET master_uid = COALESCE(p.master_uid, m.master_uid)
+            SET master_uid = p.master_uid
             FROM pushpress p
-            LEFT JOIN master_uid m
-                   ON LOWER(TRIM(m.full_name)) = LOWER(TRIM(p.first_name || ' ' || p.last_name))
             WHERE i.master_uid IS NULL
               AND REGEXP_REPLACE(i.inbody_uid, '[^0-9]', '', 'g') =
                   REGEXP_REPLACE(p.phone,      '[^0-9]', '', 'g')
-              AND COALESCE(p.master_uid, m.master_uid) IS NOT NULL
+              AND p.master_uid IS NOT NULL
               AND i.inbody_uid IS NOT NULL
               AND p.phone IS NOT NULL
         """)
