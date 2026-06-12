@@ -409,9 +409,7 @@ DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'inbody_unique_session') THEN
     ALTER TABLE inbody ADD CONSTRAINT inbody_unique_session UNIQUE (master_uid, test_date);
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'inbody_unique_uid_date') THEN
-    ALTER TABLE inbody ADD CONSTRAINT inbody_unique_uid_date UNIQUE (inbody_uid, test_date);
-  END IF;
+
 END $$;
 
 -- ── updated_at columns on all source tables (suggestion 7) ───────────────────
@@ -1010,6 +1008,52 @@ def init_db():
     cur  = conn.cursor()
     cur.execute(SCHEMA)
     conn.commit()
+
+    # Dedup inbody before adding unique constraint on (inbody_uid, test_date)
+    # so the ALTER TABLE doesn't fail on existing duplicate rows
+    cur.execute("""
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'inbody_unique_uid_date' LIMIT 1
+    """)
+    if not cur.fetchone():
+        print("  Deduping inbody before adding unique constraint...")
+        # Step 1: drop null-master_uid rows where a linked row exists for same uid+date
+        cur.execute("""
+            DELETE FROM inbody orphan
+            USING inbody linked
+            WHERE orphan.master_uid IS NULL
+              AND linked.master_uid IS NOT NULL
+              AND orphan.inbody_uid = linked.inbody_uid
+              AND orphan.test_date  = linked.test_date
+              AND orphan.id        != linked.id
+        """)
+        print(f"  Removed {cur.rowcount} orphaned null-master_uid rows")
+        # Step 2: among remaining nulls, keep only the latest per (inbody_uid, test_date)
+        cur.execute("""
+            DELETE FROM inbody
+            WHERE id IN (
+                SELECT id FROM (
+                    SELECT id,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY inbody_uid, test_date
+                               ORDER BY id DESC
+                           ) AS rn
+                    FROM inbody
+                    WHERE master_uid IS NULL
+                ) ranked
+                WHERE rn > 1
+            )
+        """)
+        print(f"  Removed {cur.rowcount} duplicate null-master_uid rows")
+        conn.commit()
+        # Now safe to add the constraint
+        cur.execute("""
+            ALTER TABLE inbody
+            ADD CONSTRAINT inbody_unique_uid_date UNIQUE (inbody_uid, test_date)
+        """)
+        conn.commit()
+        print("  Added inbody_unique_uid_date constraint")
+
     cur.close()
     conn.close()
     print("Database initialized — all tables ready.")
