@@ -276,62 +276,25 @@ async def generate_report(athlete_name: str = Form(...)):
 
 # ─────────────────────────────────────────────────────────────────────────────
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 
-@app.post("/sync_phones")
-async def sync_phones(file: UploadFile = File(...)):
+@app.post("/dedup_inbody")
+def dedup_inbody():
     """
-    Accept a CSV with columns: name, phone
-    Reconciles against pushpress table:
-      - Names not found are logged
-      - Missing phones are added
-      - Mismatched phones are updated
-    Returns a log of every change and every missing name.
+    One-time cleanup of orphaned/duplicate inbody rows.
+    Safe to call multiple times. Run this once after deploying the inbody
+    ingest fix to clear out null-master_uid duplicates blocking future uploads.
     """
-    suffix   = ".xlsx" if file.filename.endswith((".xlsx", ".xls")) else ".csv"
-    tmp_path = None
     try:
-        import pandas as pd
-        contents = await file.read()
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            tmp.write(contents)
-            tmp_path = tmp.name
-
-        if suffix == ".xlsx":
-            df = pd.read_excel(tmp_path, dtype=str)
-        else:
-            df = pd.read_csv(tmp_path, dtype=str)
-
-        df.columns = [c.strip().lower() for c in df.columns]
-        if "name" not in df.columns or "phone" not in df.columns:
-            return JSONResponse(
-                {"error": "File must have columns: name, phone"},
-                status_code=400
-            )
-
-        records = df[["name", "phone"]].fillna("").to_dict(orient="records")
-
-        from sc_db import sync_inbody_phones
-        log = sync_inbody_phones(records)
-
-        return {
-            "status":         "ok",
-            "not_found_count":     len(log["not_found"]),
-            "phone_added_count":   len(log["phone_added"]),
-            "phone_updated_count": len(log["phone_updated"]),
-            "not_found":     log["not_found"],
-            "phone_added":   log["phone_added"],
-            "phone_updated": log["phone_updated"],
-        }
-
+        from sc_db import dedup_inbody as _dedup
+        _dedup()
+        return {"status": "ok", "message": "Dedup complete — check server logs for row counts"}
     except Exception as exc:
         traceback.print_exc()
         return JSONResponse({"error": str(exc)}, status_code=500)
 
-    finally:
-        if tmp_path and os.path.exists(tmp_path):
-            os.unlink(tmp_path)
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import uvicorn

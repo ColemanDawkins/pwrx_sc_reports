@@ -409,6 +409,9 @@ DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'inbody_unique_session') THEN
     ALTER TABLE inbody ADD CONSTRAINT inbody_unique_session UNIQUE (master_uid, test_date);
   END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'inbody_unique_uid_date') THEN
+    ALTER TABLE inbody ADD CONSTRAINT inbody_unique_uid_date UNIQUE (inbody_uid, test_date);
+  END IF;
 END $$;
 
 -- ── updated_at columns on all source tables (suggestion 7) ───────────────────
@@ -847,6 +850,12 @@ TABLE_UNIQUE_KEY = {
     "inbody":           None,
 }
 
+# Tables whose unique constraint spans multiple columns
+# Format: (conflict_columns, update_excluded_columns)
+TABLE_COMPOSITE_KEY = {
+    "inbody": ("inbody_uid, test_date", ["master_uid", "inbody_uid", "test_date"]),
+}
+
 # Columns to insert per table (in order)
 TABLE_COLUMNS = {
     "master_uid": [
@@ -1004,6 +1013,57 @@ def init_db():
     cur.close()
     conn.close()
     print("Database initialized — all tables ready.")
+
+
+def dedup_inbody():
+    """
+    One-time cleanup: remove orphaned inbody rows where master_uid IS NULL
+    that are duplicates of rows that have a master_uid, keeping the linked row.
+    Also removes duplicate null-master_uid rows keeping only the latest by id.
+
+    Safe to run multiple times — does nothing if no duplicates exist.
+    """
+    conn = get_conn()
+    cur  = conn.cursor()
+
+    # Step 1: delete null-master_uid rows where a linked version already exists
+    # for the same inbody_uid + test_date
+    cur.execute("""
+        DELETE FROM inbody orphan
+        USING inbody linked
+        WHERE orphan.master_uid IS NULL
+          AND linked.master_uid IS NOT NULL
+          AND orphan.inbody_uid = linked.inbody_uid
+          AND orphan.test_date  = linked.test_date
+          AND orphan.id        != linked.id
+    """)
+    step1 = cur.rowcount
+    print(f"  dedup_inbody step 1: removed {step1} orphaned null-master_uid rows")
+
+    # Step 2: among remaining null-master_uid rows, keep only the latest per
+    # (inbody_uid, test_date) and delete the rest
+    cur.execute("""
+        DELETE FROM inbody
+        WHERE id IN (
+            SELECT id FROM (
+                SELECT id,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY inbody_uid, test_date
+                           ORDER BY id DESC
+                       ) AS rn
+                FROM inbody
+                WHERE master_uid IS NULL
+            ) ranked
+            WHERE rn > 1
+        )
+    """)
+    step2 = cur.rowcount
+    print(f"  dedup_inbody step 2: removed {step2} duplicate null-master_uid rows")
+
+    conn.commit()
+    cur.close()
+    conn.close()
+    print(f"  dedup_inbody complete — {step1 + step2} rows removed total")
 
 
 def _map_columns(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
@@ -1174,14 +1234,14 @@ def ingest_file(path: str, table: str, verbose: bool = True) -> dict:
     df = df.apply(lambda col: col.str.strip() if col.dtype == "object" else col)
 
     # Strip <> and normalize phone number from InBody ID column
-    # Check prefixed form first ("1. ID") since prefix strip happens later
+    # Note: column prefix stripping happens later for inbody, so check both forms
     if table == "inbody":
-        id_col = next((c for c in ["1. ID", "inbody_uid", "ID"] if c in df.columns), None)
+        id_col = next((c for c in ["inbody_uid", "ID"] if c in df.columns), None)
         if id_col:
             df[id_col] = (df[id_col]
                           .astype(str)
-                          .str.replace(r"[^0-9]", "", regex=True)
-                          .replace("", None))
+                          .str.strip("<>")
+                          .str.replace(r"[^0-9]", "", regex=True))
 
     # Pre-rename ambiguous columns before alias matching
     # Both Vald and ArmCare have a "Time" column that maps to different DB columns
@@ -1221,7 +1281,8 @@ def ingest_file(path: str, table: str, verbose: bool = True) -> dict:
         df = _link_master_uid(df, table, conn)
 
     inserted = skipped = flagged = 0
-    unique_key = TABLE_UNIQUE_KEY.get(table)
+    unique_key      = TABLE_UNIQUE_KEY.get(table)
+    composite_key   = TABLE_COMPOSITE_KEY.get(table)
     cur = conn.cursor()
 
     for _, row in df.iterrows():
@@ -1235,7 +1296,26 @@ def ingest_file(path: str, table: str, verbose: bool = True) -> dict:
             placeholders = ", ".join(["%s"] * len(cols))
             col_list = ", ".join(cols)
 
-            if unique_key and unique_key in cols:
+            if composite_key:
+                # Composite unique constraint (e.g. inbody: inbody_uid + test_date)
+                conflict_cols, skip_on_update = composite_key
+                update_set = ", ".join(
+                    f"{c}=EXCLUDED.{c}" for c in cols if c not in skip_on_update
+                )
+                if update_set:
+                    sql = f"""
+                        INSERT INTO {table} ({col_list})
+                        VALUES ({placeholders})
+                        ON CONFLICT ({conflict_cols}) DO UPDATE
+                        SET {update_set}
+                    """
+                else:
+                    sql = f"""
+                        INSERT INTO {table} ({col_list})
+                        VALUES ({placeholders})
+                        ON CONFLICT ({conflict_cols}) DO NOTHING
+                    """
+            elif unique_key and unique_key in cols:
                 sql = f"""
                     INSERT INTO {table} ({col_list})
                     VALUES ({placeholders})
