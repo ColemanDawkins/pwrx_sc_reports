@@ -1210,18 +1210,14 @@ def ingest_file(path: str, table: str, verbose: bool = True) -> dict:
     df, col_warnings = _map_columns(df)
     warnings.extend(col_warnings)
 
-    # Debug: log mapped vs expected columns for inbody
-    if table == "inbody":
-        print(f"  [DEBUG] df columns after mapping ({len(df.columns)}): {sorted(df.columns.tolist())}")
-
     cols = TABLE_COLUMNS.get(table)
     if not cols:
         raise ValueError(f"Unknown table: {table}")
 
-    if table == "inbody":
-        matched = [c for c in cols if c in df.columns]
-        missing = [c for c in cols if c not in df.columns]
-        print(f"  [DEBUG] TABLE_COLUMNS matched: {len(matched)}, missing: {missing[:10]}")
+    # InBody exports age as float string e.g. "29.0" but DB column is INTEGER
+    # Cast to nullable int so "29.0" -> 29 and blanks stay None
+    if table == "inbody" and "age" in df.columns:
+        df["age"] = pd.to_numeric(df["age"], errors="coerce").round(0).astype("Int64")
 
     conn = get_conn()
 
