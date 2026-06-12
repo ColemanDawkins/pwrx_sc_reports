@@ -1214,11 +1214,6 @@ def ingest_file(path: str, table: str, verbose: bool = True) -> dict:
     if not cols:
         raise ValueError(f"Unknown table: {table}")
 
-    # InBody exports age as float string e.g. "29.0" but DB column is INTEGER
-    # Cast to nullable int so "29.0" -> 29 and blanks stay None
-    if table == "inbody" and "age" in df.columns:
-        df["age"] = pd.to_numeric(df["age"], errors="coerce").round(0).astype("Int64")
-
     conn = get_conn()
 
     # For InBody: truncate the table before inserting — exports always contain
@@ -1433,7 +1428,9 @@ def _map_inbody(rows: list) -> dict:
     return {
         "available":      True,
         "weight":         round(sf("weight"), 1),
+        "weight_lbs":     round(sf("weight"), 1),
         "smm":            round(sf("smm"), 1),
+        "smm_lbs":        round(sf("smm"), 1),
         "pbf":            round(sf("pbf"), 1),
         "bmi":            round(sf("bmi"), 1),
         "score":          int(sf("inbody_score")),
