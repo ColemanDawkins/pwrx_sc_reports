@@ -23,6 +23,8 @@ st.markdown("---")
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["Generate Report", "Upload Data", "Athletes", "Roster", "Sync Phones"])
 
 
+
+
 # ── TAB 1: Generate Report ────────────────────────────────────────────────────
 with tab1:
     st.markdown("### Generate Athlete Report")
