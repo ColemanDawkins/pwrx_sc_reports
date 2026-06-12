@@ -409,7 +409,6 @@ DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'inbody_unique_session') THEN
     ALTER TABLE inbody ADD CONSTRAINT inbody_unique_session UNIQUE (master_uid, test_date);
   END IF;
-
 END $$;
 
 -- ── updated_at columns on all source tables (suggestion 7) ───────────────────
@@ -848,12 +847,6 @@ TABLE_UNIQUE_KEY = {
     "inbody":           None,
 }
 
-# Tables whose unique constraint spans multiple columns
-# Format: (conflict_columns, update_excluded_columns)
-TABLE_COMPOSITE_KEY = {
-    "inbody": ("inbody_uid, test_date", ["master_uid", "inbody_uid", "test_date"]),
-}
-
 # Columns to insert per table (in order)
 TABLE_COLUMNS = {
     "master_uid": [
@@ -1008,106 +1001,9 @@ def init_db():
     cur  = conn.cursor()
     cur.execute(SCHEMA)
     conn.commit()
-
-    # Dedup inbody before adding unique constraint on (inbody_uid, test_date)
-    # so the ALTER TABLE doesn't fail on existing duplicate rows
-    cur.execute("""
-        SELECT 1 FROM pg_constraint
-        WHERE conname = 'inbody_unique_uid_date' LIMIT 1
-    """)
-    if not cur.fetchone():
-        print("  Deduping inbody before adding unique constraint...")
-        # Step 1: drop null-master_uid rows where a linked row exists for same uid+date
-        cur.execute("""
-            DELETE FROM inbody orphan
-            USING inbody linked
-            WHERE orphan.master_uid IS NULL
-              AND linked.master_uid IS NOT NULL
-              AND orphan.inbody_uid = linked.inbody_uid
-              AND orphan.test_date  = linked.test_date
-              AND orphan.id        != linked.id
-        """)
-        print(f"  Removed {cur.rowcount} orphaned null-master_uid rows")
-        # Step 2: among remaining nulls, keep only the latest per (inbody_uid, test_date)
-        cur.execute("""
-            DELETE FROM inbody
-            WHERE id IN (
-                SELECT id FROM (
-                    SELECT id,
-                           ROW_NUMBER() OVER (
-                               PARTITION BY inbody_uid, test_date
-                               ORDER BY id DESC
-                           ) AS rn
-                    FROM inbody
-                    WHERE master_uid IS NULL
-                ) ranked
-                WHERE rn > 1
-            )
-        """)
-        print(f"  Removed {cur.rowcount} duplicate null-master_uid rows")
-        conn.commit()
-        # Now safe to add the constraint
-        cur.execute("""
-            ALTER TABLE inbody
-            ADD CONSTRAINT inbody_unique_uid_date UNIQUE (inbody_uid, test_date)
-        """)
-        conn.commit()
-        print("  Added inbody_unique_uid_date constraint")
-
     cur.close()
     conn.close()
     print("Database initialized — all tables ready.")
-
-
-def dedup_inbody():
-    """
-    One-time cleanup: remove orphaned inbody rows where master_uid IS NULL
-    that are duplicates of rows that have a master_uid, keeping the linked row.
-    Also removes duplicate null-master_uid rows keeping only the latest by id.
-
-    Safe to run multiple times — does nothing if no duplicates exist.
-    """
-    conn = get_conn()
-    cur  = conn.cursor()
-
-    # Step 1: delete null-master_uid rows where a linked version already exists
-    # for the same inbody_uid + test_date
-    cur.execute("""
-        DELETE FROM inbody orphan
-        USING inbody linked
-        WHERE orphan.master_uid IS NULL
-          AND linked.master_uid IS NOT NULL
-          AND orphan.inbody_uid = linked.inbody_uid
-          AND orphan.test_date  = linked.test_date
-          AND orphan.id        != linked.id
-    """)
-    step1 = cur.rowcount
-    print(f"  dedup_inbody step 1: removed {step1} orphaned null-master_uid rows")
-
-    # Step 2: among remaining null-master_uid rows, keep only the latest per
-    # (inbody_uid, test_date) and delete the rest
-    cur.execute("""
-        DELETE FROM inbody
-        WHERE id IN (
-            SELECT id FROM (
-                SELECT id,
-                       ROW_NUMBER() OVER (
-                           PARTITION BY inbody_uid, test_date
-                           ORDER BY id DESC
-                       ) AS rn
-                FROM inbody
-                WHERE master_uid IS NULL
-            ) ranked
-            WHERE rn > 1
-        )
-    """)
-    step2 = cur.rowcount
-    print(f"  dedup_inbody step 2: removed {step2} duplicate null-master_uid rows")
-
-    conn.commit()
-    cur.close()
-    conn.close()
-    print(f"  dedup_inbody complete — {step1 + step2} rows removed total")
 
 
 def _map_columns(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
@@ -1320,13 +1216,21 @@ def ingest_file(path: str, table: str, verbose: bool = True) -> dict:
 
     conn = get_conn()
 
+    # For InBody: truncate the table before inserting — exports always contain
+    # the full dataset so a reset is cleaner than upsert logic
+    if table == "inbody":
+        trunc_cur = conn.cursor()
+        trunc_cur.execute("TRUNCATE TABLE inbody RESTART IDENTITY")
+        conn.commit()
+        trunc_cur.close()
+        print("  InBody table truncated — loading fresh from export")
+
     # Try to auto-link master_uid
     if table != "master_uid":
         df = _link_master_uid(df, table, conn)
 
     inserted = skipped = flagged = 0
-    unique_key      = TABLE_UNIQUE_KEY.get(table)
-    composite_key   = TABLE_COMPOSITE_KEY.get(table)
+    unique_key = TABLE_UNIQUE_KEY.get(table)
     cur = conn.cursor()
 
     for _, row in df.iterrows():
@@ -1340,26 +1244,7 @@ def ingest_file(path: str, table: str, verbose: bool = True) -> dict:
             placeholders = ", ".join(["%s"] * len(cols))
             col_list = ", ".join(cols)
 
-            if composite_key:
-                # Composite unique constraint (e.g. inbody: inbody_uid + test_date)
-                conflict_cols, skip_on_update = composite_key
-                update_set = ", ".join(
-                    f"{c}=EXCLUDED.{c}" for c in cols if c not in skip_on_update
-                )
-                if update_set:
-                    sql = f"""
-                        INSERT INTO {table} ({col_list})
-                        VALUES ({placeholders})
-                        ON CONFLICT ({conflict_cols}) DO UPDATE
-                        SET {update_set}
-                    """
-                else:
-                    sql = f"""
-                        INSERT INTO {table} ({col_list})
-                        VALUES ({placeholders})
-                        ON CONFLICT ({conflict_cols}) DO NOTHING
-                    """
-            elif unique_key and unique_key in cols:
+            if unique_key and unique_key in cols:
                 sql = f"""
                     INSERT INTO {table} ({col_list})
                     VALUES ({placeholders})
