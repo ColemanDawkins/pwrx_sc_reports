@@ -259,34 +259,30 @@ with tab3:
                         df_dari = pd.read_csv(_io.BytesIO(dari_file.read()), dtype=str)
 
                     # Find dari_id column
-                    id_col = next((c for c in df_dari.columns if c.strip().lower() == "meta__person__unique_id" or "participant" in c.lower() or "dari_id" in c.lower() or c.strip().lower() == "id"), None)
-                    name_cols = [c for c in df_dari.columns if "first" in c.lower() or "last" in c.lower() or "name" in c.lower()]
+                    # Look specifically for meta__person__unique_id column
+                    id_col = next((c for c in df_dari.columns if c.strip().lower() == "meta__person__unique_id"), None)
 
-                    if id_col:
-                        # Try to find row matching this athlete by name
-                        dari_id_val = None
-                        fn = name.split()[0].lower()
-                        ln = name.split()[-1].lower()
-                        for _, row in df_dari.iterrows():
-                            row_text = " ".join(str(v).lower() for v in row.values)
-                            if fn in row_text and ln in row_text:
-                                dari_id_val = str(row[id_col]).strip()
-                                break
-                        if not dari_id_val:
-                            dari_id_val = str(df_dari[id_col].iloc[0]).strip()
-
-                        resp = requests.post(
-                            API_URL + "/athletes/update_ids",
-                            json={"master_uid": uid, "dari_id": dari_id_val},
-                            timeout=15
-                        )
-                        if resp.status_code == 200:
-                            st.success(f"DARI ID saved: `{dari_id_val}`")
-                            st.session_state.dari_id_saved = True
-                        else:
-                            st.error("Error saving DARI ID: " + resp.text)
+                    if not id_col:
+                        st.error("Could not find 'meta__person__unique_id' column in this DARI file.")
                     else:
-                        st.error("Could not find a DARI ID column in this file.")
+                        # Get the unique DARI ID — all rows in this file belong to one athlete
+                        unique_ids = df_dari[id_col].dropna().unique()
+                        if len(unique_ids) == 0:
+                            st.error("No DARI IDs found in the file.")
+                        elif len(unique_ids) > 1:
+                            st.error(f"Found {len(unique_ids)} different IDs in this file. Upload a file for one athlete only.")
+                        else:
+                            dari_id_val = str(unique_ids[0]).strip()
+                            resp = requests.post(
+                                API_URL + "/athletes/update_ids",
+                                json={"master_uid": uid, "dari_id": dari_id_val},
+                                timeout=15
+                            )
+                            if resp.status_code == 200:
+                                st.success(f"DARI ID saved: `{dari_id_val}`")
+                                st.session_state.dari_id_saved = True
+                            else:
+                                st.error("Error saving DARI ID: " + resp.text)
                 except Exception as exc:
                     st.error("Error reading file: " + str(exc))
 
