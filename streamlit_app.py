@@ -259,7 +259,7 @@ with tab3:
                         df_dari = pd.read_csv(_io.BytesIO(dari_file.read()), dtype=str)
 
                     # Find dari_id column
-                    id_col = next((c for c in df_dari.columns if "participant" in c.lower() or "dari_id" in c.lower() or c.strip().lower() == "id"), None)
+                    id_col = next((c for c in df_dari.columns if c.strip().lower() == "meta__person__unique_id" or "participant" in c.lower() or "dari_id" in c.lower() or c.strip().lower() == "id"), None)
                     name_cols = [c for c in df_dari.columns if "first" in c.lower() or "last" in c.lower() or "name" in c.lower()]
 
                     if id_col:
