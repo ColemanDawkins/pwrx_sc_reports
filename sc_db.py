@@ -1681,14 +1681,11 @@ def load_athlete_data(athlete_name: str) -> dict:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ─────────────────────────────────────────────────────────────────────────────
-# PHONE SYNC  (reconcile InBody phone list against pushpress)
+# PHONE SYNC
 # ─────────────────────────────────────────────────────────────────────────────
 
 def sync_inbody_phones(records: list[dict]) -> dict:
-    """
-    Reconcile a list of {name, phone} records against pushpress.
-    Three outcomes: not_found, phone_added, phone_updated.
-    """
+    """Reconcile {name, phone} records against pushpress."""
     import re
 
     def _strip(p):
@@ -1703,27 +1700,21 @@ def sync_inbody_phones(records: list[dict]) -> dict:
         raw_phone = (rec.get("phone") or "").strip()
         if not raw_name:
             continue
-
         parts = raw_name.split(None, 1)
         first = parts[0] if parts else ""
         last  = parts[1] if len(parts) > 1 else ""
-
         cur.execute("""
             SELECT id, first_name, last_name, phone
             FROM pushpress
-            WHERE LOWER(first_name) = LOWER(%s)
-              AND LOWER(last_name)  = LOWER(%s)
+            WHERE LOWER(first_name) = LOWER(%s) AND LOWER(last_name) = LOWER(%s)
             LIMIT 1
         """, (first, last))
         row = cur.fetchone()
-
         if not row:
             log["not_found"].append({"name": raw_name, "phone": raw_phone})
             continue
-
         existing_stripped = _strip(row["phone"])
         new_stripped      = _strip(raw_phone)
-
         if not existing_stripped:
             cur.execute("UPDATE pushpress SET phone = %s WHERE id = %s", (raw_phone, row["id"]))
             conn.commit()
@@ -1731,9 +1722,7 @@ def sync_inbody_phones(records: list[dict]) -> dict:
         elif existing_stripped != new_stripped:
             cur.execute("UPDATE pushpress SET phone = %s WHERE id = %s", (raw_phone, row["id"]))
             conn.commit()
-            log["phone_updated"].append({
-                "name": raw_name, "phone_old": row["phone"], "phone_new": raw_phone,
-            })
+            log["phone_updated"].append({"name": raw_name, "phone_old": row["phone"], "phone_new": raw_phone})
 
     cur.close()
     conn.close()
@@ -1741,6 +1730,50 @@ def sync_inbody_phones(records: list[dict]) -> dict:
 
 
 # ATHLETE MANAGEMENT  (PWRX ID generation, creation, back-fill linking)
+def update_athlete_ids(master_uid: str, dari_id: str = None, phone: str = None) -> dict:
+    """
+    Update dari_id on master_uid record and/or phone on pushpress record.
+    Also writes phone to pushpress row if matched by name.
+    Returns what was updated.
+    """
+    import re
+    conn = get_conn()
+    cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    updated = {}
+
+    if dari_id:
+        cur.execute("""
+            UPDATE master_uid SET dari_id = %s WHERE master_uid = %s
+        """, (dari_id, master_uid))
+        updated["dari_id"] = dari_id
+
+    if phone:
+        clean_phone = re.sub(r"[^0-9]", "", phone)
+        # Write to master_uid table as inbody_uid
+        cur.execute("""
+            UPDATE master_uid SET inbody_uid = %s WHERE master_uid = %s
+        """, (clean_phone, master_uid))
+        # Also write to pushpress row matched by master_uid or name
+        cur.execute("""
+            UPDATE pushpress SET phone = %s
+            WHERE master_uid = %s
+        """, (clean_phone, master_uid))
+        if cur.rowcount == 0:
+            # Fall back to name match
+            cur.execute("""
+                UPDATE pushpress SET phone = %s
+                WHERE LOWER(first_name || ' ' || last_name) = (
+                    SELECT LOWER(full_name) FROM master_uid WHERE master_uid = %s
+                )
+            """, (clean_phone, master_uid))
+        updated["phone"] = clean_phone
+
+    conn.commit()
+    cur.close()
+    conn.close()
+    return updated
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 def generate_pwrx_id(cur) -> str:
@@ -1878,33 +1911,14 @@ def backfill_links(table: str = None) -> dict:
 
     # ── InBody: backfill via phone number match against pushpress ────────────
     if table is None or table == "inbody":
-        # Step 1: delete orphaned null-master_uid rows where a linked row already
-        # exists for the same (master_uid, test_date) — prevents unique constraint
-        # violation when the UPDATE below would produce a duplicate
-        cur.execute("""
-            DELETE FROM inbody orphan
-            USING inbody linked
-            WHERE orphan.master_uid IS NULL
-              AND linked.master_uid IS NOT NULL
-              AND orphan.inbody_uid = linked.inbody_uid
-              AND orphan.test_date  = linked.test_date
-        """)
-        deleted = cur.rowcount
-        if deleted:
-            print(f"  InBody backfill: removed {deleted} orphaned null rows before linking")
-
-        # Step 2: update remaining null rows via phone match, joining through
-        # master_uid table so unlinked pushpress rows are also matched
         cur.execute("""
             UPDATE inbody i
-            SET master_uid = COALESCE(p.master_uid, m.master_uid)
+            SET master_uid = p.master_uid
             FROM pushpress p
-            LEFT JOIN master_uid m
-                   ON LOWER(TRIM(m.full_name)) = LOWER(TRIM(p.first_name || ' ' || p.last_name))
             WHERE i.master_uid IS NULL
               AND REGEXP_REPLACE(i.inbody_uid, '[^0-9]', '', 'g') =
                   REGEXP_REPLACE(p.phone,      '[^0-9]', '', 'g')
-              AND COALESCE(p.master_uid, m.master_uid) IS NOT NULL
+              AND p.master_uid IS NOT NULL
               AND i.inbody_uid IS NOT NULL
               AND p.phone IS NOT NULL
         """)

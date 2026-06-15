@@ -20,9 +20,14 @@ st.markdown(
 )
 st.markdown("---")
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["Generate Report", "Upload Data", "Athletes", "Roster", "Sync Phones"])
+tab1, tab2, tab3, tab4 = st.tabs(["Generate Report", "Upload Data", "Athletes", "Roster"])
 
-
+# Session state for multi-step athlete creation
+if "new_athlete_uid"       not in st.session_state: st.session_state.new_athlete_uid       = None
+if "new_athlete_name"      not in st.session_state: st.session_state.new_athlete_name      = None
+if "athlete_create_step"   not in st.session_state: st.session_state.athlete_create_step   = 1
+if "dari_id_saved"         not in st.session_state: st.session_state.dari_id_saved         = False
+if "phone_saved"           not in st.session_state: st.session_state.phone_saved           = False
 
 
 # ── TAB 1: Generate Report ────────────────────────────────────────────────────
@@ -177,48 +182,39 @@ with tab2:
 with tab3:
     st.markdown("### Athlete Management")
 
-    # ── Section A: Manual creation ────────────────────────────────────────────
+    # ── Section A: Multi-step athlete creation ───────────────────────────────
     st.markdown("#### Add New Athlete")
-    st.caption("Creates a new PWRX master record. Checks for duplicates before creating.")
 
-    with st.form("create_athlete_form"):
-        col1, col2 = st.columns(2)
-        new_first  = col1.text_input("First name")
-        new_last   = col2.text_input("Last name")
-        submitted  = st.form_submit_button("Create Athlete", type="primary")
+    step = st.session_state.athlete_create_step
 
-    if submitted:
-        if not new_first.strip() or not new_last.strip():
-            st.error("First name and last name are both required.")
-        else:
-            # Preview search first
-            full_preview = f"{new_first.strip()} {new_last.strip()}"
-            with st.spinner(f"Checking for existing records matching '{full_preview}'..."):
-                try:
-                    srch = requests.get(
-                        API_URL + "/athletes/search",
-                        params={"q": full_preview},
-                        timeout=10
-                    )
-                    matches = srch.json().get("results", []) if srch.status_code == 200 else []
-                except Exception:
-                    matches = []
+    # ── Step 1: Name entry ────────────────────────────────────────────────────
+    if step == 1:
+        st.caption("Step 1 of 3 — Enter athlete name to create a PWRX ID.")
+        with st.form("create_athlete_form"):
+            col1, col2 = st.columns(2)
+            new_first  = col1.text_input("First name")
+            new_last   = col2.text_input("Last name")
+            submitted  = st.form_submit_button("Create Athlete", type="primary")
 
-            if matches:
-                st.warning(
-                    f"Found {len(matches)} possible match(es) for '{full_preview}'. "
-                    "Review before creating to avoid duplicates."
-                )
-                for m in matches[:5]:
-                    st.info(f"**{m['master_uid']}** — {m['full_name']}")
-                if st.button("Create anyway (not a duplicate)", key="force_create"):
-                    _do_create = True
-                else:
-                    _do_create = False
+        if submitted:
+            if not new_first.strip() or not new_last.strip():
+                st.error("First name and last name are both required.")
             else:
-                _do_create = True
+                full_preview = f"{new_first.strip()} {new_last.strip()}"
+                with st.spinner(f"Checking for existing records matching '{full_preview}'..."):
+                    try:
+                        srch = requests.get(API_URL + "/athletes/search", params={"q": full_preview}, timeout=10)
+                        matches = srch.json().get("results", []) if srch.status_code == 200 else []
+                    except Exception:
+                        matches = []
 
-            if _do_create:
+                if matches:
+                    st.warning(f"Found {len(matches)} possible match(es) for '{full_preview}'. Review before creating.")
+                    for m in matches[:5]:
+                        st.info(f"**{m['master_uid']}** — {m['full_name']}")
+                    if not st.button("Create anyway (not a duplicate)", key="force_create"):
+                        st.stop()
+
                 with st.spinner("Creating athlete..."):
                     try:
                         resp = requests.post(
@@ -228,18 +224,124 @@ with tab3:
                         )
                         if resp.status_code == 200:
                             r = resp.json()
-                            st.success(
-                                f"Created **{r['master_uid']}** for **{r['full_name']}**"
-                            )
+                            st.session_state.new_athlete_uid  = r["master_uid"]
+                            st.session_state.new_athlete_name = r["full_name"]
+                            st.session_state.athlete_create_step = 2
+                            st.session_state.dari_id_saved = False
+                            st.session_state.phone_saved   = False
+                            st.rerun()
                         elif resp.status_code == 409:
                             r = resp.json()
-                            st.warning(
-                                f"Skipped — duplicate found: **{r['existing_uid']}** — {r['existing_name']}"
-                            )
+                            st.warning(f"Duplicate found: **{r['existing_uid']}** — {r['existing_name']}")
                         else:
                             st.error("Error: " + resp.text)
                     except Exception as exc:
                         st.error("Connection error: " + str(exc))
+
+    # ── Step 2: DARI ID ───────────────────────────────────────────────────────
+    elif step == 2:
+        uid  = st.session_state.new_athlete_uid
+        name = st.session_state.new_athlete_name
+        st.success(f"Created **{uid}** for **{name}**")
+        st.caption("Step 2 of 3 — Upload a DARI file to capture their DARI ID.")
+
+        dari_file = st.file_uploader("Upload DARI CSV or XLSX", type=["csv", "xlsx", "xls"], key="dari_id_upload")
+
+        col_a, col_b = st.columns(2)
+        if col_a.button("Save DARI ID", type="primary", disabled=not dari_file):
+            if dari_file:
+                import io as _io
+                suffix = ".xlsx" if dari_file.name.endswith((".xlsx", ".xls")) else ".csv"
+                try:
+                    if suffix == ".xlsx":
+                        df_dari = pd.read_excel(_io.BytesIO(dari_file.read()), dtype=str)
+                    else:
+                        df_dari = pd.read_csv(_io.BytesIO(dari_file.read()), dtype=str)
+
+                    # Find dari_id column
+                    id_col = next((c for c in df_dari.columns if "participant" in c.lower() or "dari_id" in c.lower() or c.strip().lower() == "id"), None)
+                    name_cols = [c for c in df_dari.columns if "first" in c.lower() or "last" in c.lower() or "name" in c.lower()]
+
+                    if id_col:
+                        # Try to find row matching this athlete by name
+                        dari_id_val = None
+                        fn = name.split()[0].lower()
+                        ln = name.split()[-1].lower()
+                        for _, row in df_dari.iterrows():
+                            row_text = " ".join(str(v).lower() for v in row.values)
+                            if fn in row_text and ln in row_text:
+                                dari_id_val = str(row[id_col]).strip()
+                                break
+                        if not dari_id_val:
+                            dari_id_val = str(df_dari[id_col].iloc[0]).strip()
+
+                        resp = requests.post(
+                            API_URL + "/athletes/update_ids",
+                            json={"master_uid": uid, "dari_id": dari_id_val},
+                            timeout=15
+                        )
+                        if resp.status_code == 200:
+                            st.success(f"DARI ID saved: `{dari_id_val}`")
+                            st.session_state.dari_id_saved = True
+                        else:
+                            st.error("Error saving DARI ID: " + resp.text)
+                    else:
+                        st.error("Could not find a DARI ID column in this file.")
+                except Exception as exc:
+                    st.error("Error reading file: " + str(exc))
+
+        if col_b.button("Skip DARI →", key="skip_dari"):
+            st.session_state.athlete_create_step = 3
+            st.rerun()
+
+        if st.session_state.dari_id_saved:
+            if st.button("Next →", key="dari_next"):
+                st.session_state.athlete_create_step = 3
+                st.rerun()
+
+    # ── Step 3: InBody phone ──────────────────────────────────────────────────
+    elif step == 3:
+        uid  = st.session_state.new_athlete_uid
+        name = st.session_state.new_athlete_name
+        st.success(f"Setting up **{name}** ({uid})")
+        st.caption("Step 3 of 3 — Enter the athlete's phone number for InBody linking.")
+
+        phone_input = st.text_input("Phone number (digits only)", placeholder="e.g. 4055551234")
+
+        col_a, col_b = st.columns(2)
+        if col_a.button("Save Phone", type="primary", disabled=not phone_input.strip()):
+            resp = requests.post(
+                API_URL + "/athletes/update_ids",
+                json={"master_uid": uid, "phone": phone_input.strip()},
+                timeout=15
+            )
+            if resp.status_code == 200:
+                st.success(f"Phone saved: `{phone_input.strip()}`")
+                st.session_state.phone_saved = True
+            else:
+                st.error("Error saving phone: " + resp.text)
+
+        if col_b.button("Skip Phone →", key="skip_phone"):
+            st.session_state.athlete_create_step = 1
+            st.session_state.new_athlete_uid  = None
+            st.session_state.new_athlete_name = None
+            st.rerun()
+
+        if st.session_state.phone_saved:
+            if st.button("Finish ✓", key="finish_create", type="primary"):
+                st.balloons()
+                st.session_state.athlete_create_step = 1
+                st.session_state.new_athlete_uid  = None
+                st.session_state.new_athlete_name = None
+                st.rerun()
+
+    # Reset link
+    if step > 1:
+        if st.button("← Start over", key="reset_create"):
+            st.session_state.athlete_create_step = 1
+            st.session_state.new_athlete_uid  = None
+            st.session_state.new_athlete_name = None
+            st.rerun()
 
     st.markdown("---")
 
@@ -349,71 +451,6 @@ with tab4:
         st.caption(f"{len(roster_data2)} athletes in database")
     else:
         st.info("No athletes in database yet.")
-
-
-
-# ── TAB 5: Sync Phones ────────────────────────────────────────────────────────
-with tab5:
-    st.markdown("### Sync Phone Numbers")
-    st.caption(
-        "Upload a CSV or Excel file with name and phone columns. "
-        "Matches against PushPress and adds or updates phone numbers where needed."
-    )
-
-    phone_file = st.file_uploader(
-        "Select file (must have name and phone columns)",
-        type=["csv", "xlsx", "xls"],
-        key="phone_sync"
-    )
-
-    if phone_file:
-        st.success(f"File loaded: {phone_file.name}")
-        if st.button("Run Phone Sync", type="primary"):
-            with st.spinner("Syncing phone numbers..."):
-                try:
-                    suffix = ".xlsx" if phone_file.name.endswith((".xlsx", ".xls")) else ".csv"
-                    mime   = ("application/vnd.openxmlformats-officedocument"
-                              ".spreadsheetml.sheet" if suffix == ".xlsx" else "text/csv")
-                    response = requests.post(
-                        API_URL + "/sync_phones",
-                        files={"file": (phone_file.name, phone_file.getvalue(), mime)},
-                        timeout=120
-                    )
-
-                    if response.status_code == 200:
-                        r = response.json()
-                        added   = r.get("phone_added_count", 0)
-                        updated = r.get("phone_updated_count", 0)
-                        missing = r.get("not_found_count", 0)
-
-                        col1, col2, col3 = st.columns(3)
-                        col1.metric("Phones Added",   added)
-                        col2.metric("Phones Updated", updated)
-                        col3.metric("Names Not Found", missing)
-
-                        if r.get("phone_added"):
-                            with st.expander(f"Phones added ({added})"):
-                                for rec in r["phone_added"]:
-                                    st.write(f"• **{rec['name']}** → {rec['phone_new']}")
-
-                        if r.get("phone_updated"):
-                            with st.expander(f"Phones updated ({updated})"):
-                                for rec in r["phone_updated"]:
-                                    st.write(
-                                        f"• **{rec['name']}** — "
-                                        f"{rec['phone_old']} → {rec['phone_new']}"
-                                    )
-
-                        if r.get("not_found"):
-                            with st.expander(f"Names not found in PushPress ({missing})"):
-                                for rec in r["not_found"]:
-                                    st.write(f"• **{rec['name']}** ({rec['phone']})")
-
-                    else:
-                        st.error("Error: " + response.text)
-
-                except Exception as exc:
-                    st.error("Connection error: " + str(exc))
 
 st.markdown("---")
 st.caption("PWRX · Strength & Conditioning Data Platform")

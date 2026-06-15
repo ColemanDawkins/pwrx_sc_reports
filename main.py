@@ -280,16 +280,33 @@ async def generate_report(athlete_name: str = Form(...)):
 
 # ─────────────────────────────────────────────────────────────────────────────
 
+class UpdateAthleteIdsRequest(BaseModel):
+    master_uid: str
+    dari_id:    Optional[str] = None
+    phone:      Optional[str] = None
+
+
+@app.post("/athletes/update_ids")
+def athlete_update_ids(req: UpdateAthleteIdsRequest):
+    """Update dari_id and/or phone for an existing athlete."""
+    try:
+        from sc_db import update_athlete_ids
+        updated = update_athlete_ids(
+            master_uid=req.master_uid,
+            dari_id=req.dari_id,
+            phone=req.phone,
+        )
+        return {"status": "ok", "updated": updated}
+    except Exception as exc:
+        traceback.print_exc()
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+
 @app.post("/sync_phones")
 async def sync_phones(file: UploadFile = File(...)):
-    """
-    Accept a CSV or Excel file with name and phone columns.
-    Reconciles against pushpress table:
-      - Names not found are logged
-      - Missing phones are added
-      - Mismatched phones are updated
-    Returns a log of every change and every missing name.
-    """
+    """Accept a CSV/XLSX with name and phone columns, reconcile against pushpress."""
     suffix   = ".xlsx" if file.filename.endswith((".xlsx", ".xls")) else ".csv"
     tmp_path = None
     try:
@@ -306,13 +323,9 @@ async def sync_phones(file: UploadFile = File(...)):
 
         df.columns = [c.strip().lower() for c in df.columns]
         if "name" not in df.columns or "phone" not in df.columns:
-            return JSONResponse(
-                {"error": "File must have columns: name, phone"},
-                status_code=400
-            )
+            return JSONResponse({"error": "File must have columns: name, phone"}, status_code=400)
 
         records = df[["name", "phone"]].fillna("").to_dict(orient="records")
-
         from sc_db import sync_inbody_phones
         log = sync_inbody_phones(records)
 
@@ -325,11 +338,9 @@ async def sync_phones(file: UploadFile = File(...)):
             "phone_added":          log["phone_added"],
             "phone_updated":        log["phone_updated"],
         }
-
     except Exception as exc:
         traceback.print_exc()
         return JSONResponse({"error": str(exc)}, status_code=500)
-
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
