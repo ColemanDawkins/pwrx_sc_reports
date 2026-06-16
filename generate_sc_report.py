@@ -1213,9 +1213,9 @@ html,body{background:var(--bg);color:#E8F0F8;font-family:'Barlow Condensed',sans
   .hdr-name{font-size:20px;letter-spacing:2px;}
   .hdr{height:auto;padding:10px 14px;flex-wrap:wrap;gap:4px;}
   .card{height:auto;overflow:visible;}
-  .dari-layout{flex-direction:column;overflow:visible;flex:none;}
-  .dari-scan-wrap{height:280px;width:100%;flex-shrink:0;}
   .card-body{overflow:visible;}
+  .dari-layout{flex-direction:column;overflow:visible;flex:none;}
+  .dari-scan-wrap{height:280px!important;width:100%;flex-shrink:0;}
   .dari-scores{width:100%;padding-top:8px;flex:none;}
   .body-dot{width:19.5px!important;height:19.5px!important;min-width:19.5px!important;min-height:19.5px!important;max-width:19.5px!important;max-height:19.5px!important;}
   .body-dot span:first-child{font-size:8px!important;}
