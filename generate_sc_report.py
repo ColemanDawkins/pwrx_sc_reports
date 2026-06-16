@@ -1287,10 +1287,9 @@ html,body{background:var(--bg);color:#E8F0F8;font-family:'Barlow Condensed',sans
         <div class="num-card arm"><div class="nv lg">{{ arm.current.total_strength }}<span class="nu"> lbs</span></div><div class="nl">Total Strength</div>{% if arm.prev %}{{ chip(arm.current.total_strength, arm.prev.total_strength)|safe }}{% endif %}</div>
       </div>
       <div class="div"></div>
-      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;">
-        <div class="num-card arm"><div class="nv sm">{{ arm.current.velo or "—" }}</div><div class="nl">Velo (mph)</div></div>
-        <div class="num-card arm"><div class="nv sm">{{ arm.current.balance }}</div><div class="nl">Balance</div>{% if arm.prev %}{{ chip(arm.current.balance, arm.prev.balance)|safe }}{% endif %}</div>
-        <div class="num-card arm"><div class="nv sm">{{ arm.current.svr }}</div><div class="nl">SVR</div>{% if arm.prev %}{{ chip(arm.current.svr, arm.prev.svr)|safe }}{% endif %}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+        <div class="num-card arm"><div class="nv lg">{{ arm.current.balance }}</div><div class="nl">Balance</div>{% if arm.prev %}{{ chip(arm.current.balance, arm.prev.balance)|safe }}{% endif %}</div>
+        <div class="num-card arm"><div class="nv lg">{{ arm.current.svr }}</div><div class="nl">SVR</div>{% if arm.prev %}{{ chip(arm.current.svr, arm.prev.svr)|safe }}{% endif %}</div>
       </div>
     </div>
   </div>
@@ -1409,11 +1408,11 @@ def build_body_scan_dots(data: dict) -> str:
     ]
     dots = ""
     for short, x, y, key in positions:
-        val = joints.get(key) or 0
+        val = round(joints.get(key) or 0)
         color = jcolor(val)
         dots += (
             f'<div style="position:absolute;left:{x}%;top:{y}%;transform:translate(-50%,-50%);'
-            f'width:30px;height:30px;border-radius:50%;background:{color};'
+            f'width:13%;aspect-ratio:1;border-radius:50%;background:{color};'
             f'border:1.5px solid rgba(255,255,255,0.5);'
             f'display:flex;flex-direction:column;align-items:center;justify-content:center;'
             f'box-shadow:0 0 8px {color}CC;z-index:3;">'
