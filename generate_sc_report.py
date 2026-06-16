@@ -1212,6 +1212,7 @@ html,body{background:var(--bg);color:#E8F0F8;font-family:'Barlow Condensed',sans
   .p2-grid{grid-template-columns:1fr !important;}
   .hdr-name{font-size:20px;letter-spacing:2px;}
   .hdr{height:auto;padding:10px 14px;flex-wrap:wrap;gap:4px;}
+  .card{height:auto;overflow:visible;}
   .dari-layout{flex-direction:column;overflow:visible;flex:none;}
   .dari-scan-wrap{height:280px;width:100%;flex-shrink:0;}
   .card-body{overflow:visible;}
