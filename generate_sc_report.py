@@ -1174,16 +1174,7 @@ html,body{background:var(--bg);color:#E8F0F8;font-family:'Barlow Condensed',sans
 @media print{.page-break{page-break-before:always;}}
 .p1-grid{display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;
   gap:8px;padding:8px;height:calc(100vh - 58px);min-height:680px;}
-@media (max-width:768px){
-  .p1-grid{grid-template-columns:1fr;grid-template-rows:auto;height:auto;min-height:unset;}
-  .p2-grid{grid-template-columns:1fr !important;}
-  .hdr-name{font-size:20px;letter-spacing:2px;}
-  .hdr{height:auto;padding:10px 14px;flex-wrap:wrap;gap:4px;}
-  .dari-layout{flex-direction:column;}
-  .dari-scan-wrap{height:280px;width:100%;}
-  .card-body{overflow:visible;}
-  .dari-scores{width:100%;padding-top:8px;}
-}
+
 .card{background:var(--panel);border-radius:10px;overflow:hidden;display:flex;flex-direction:column;border:1px solid var(--border);}
 .card-hdr{display:flex;align-items:center;padding:0 14px;height:48px;border-bottom:2px solid;flex-shrink:0;}
 .card-hdr.dari  {border-color:var(--dari);background:rgba(56,163,165,0.15);}
@@ -1217,6 +1208,16 @@ html,body{background:var(--bg);color:#E8F0F8;font-family:'Barlow Condensed',sans
 .flag-hdr{background:rgba(239,68,68,0.65);padding:6px 14px;font-family:'Bebas Neue',sans-serif;font-size:15px;letter-spacing:2px;color:#fff;}
 .flag-ok{padding:10px 14px;font-size:12px;color:#22c55e;}
 .flag-item{padding:6px 14px;font-size:11px;color:#EF4444;}
+@media (max-width:768px){
+  .p1-grid{grid-template-columns:1fr;grid-template-rows:auto;height:auto;min-height:unset;}
+  .p2-grid{grid-template-columns:1fr !important;}
+  .hdr-name{font-size:20px;letter-spacing:2px;}
+  .hdr{height:auto;padding:10px 14px;flex-wrap:wrap;gap:4px;}
+  .dari-layout{flex-direction:column;overflow:visible;flex:none;}
+  .dari-scan-wrap{height:280px;width:100%;flex-shrink:0;}
+  .card-body{overflow:visible;}
+  .dari-scores{width:100%;padding-top:8px;flex:none;}
+}
 </style>
 </head>
 <body>
@@ -1287,9 +1288,10 @@ html,body{background:var(--bg);color:#E8F0F8;font-family:'Barlow Condensed',sans
         <div class="num-card arm"><div class="nv lg">{{ arm.current.total_strength }}<span class="nu"> lbs</span></div><div class="nl">Total Strength</div>{% if arm.prev %}{{ chip(arm.current.total_strength, arm.prev.total_strength)|safe }}{% endif %}</div>
       </div>
       <div class="div"></div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
-        <div class="num-card arm"><div class="nv lg">{{ arm.current.balance }}</div><div class="nl">Balance</div>{% if arm.prev %}{{ chip(arm.current.balance, arm.prev.balance)|safe }}{% endif %}</div>
-        <div class="num-card arm"><div class="nv lg">{{ arm.current.svr }}</div><div class="nl">SVR</div>{% if arm.prev %}{{ chip(arm.current.svr, arm.prev.svr)|safe }}{% endif %}</div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;">
+        <div class="num-card arm"><div class="nv sm">{{ arm.current.velo or "—" }}</div><div class="nl">Velo (mph)</div></div>
+        <div class="num-card arm"><div class="nv sm">{{ arm.current.balance }}</div><div class="nl">Balance</div>{% if arm.prev %}{{ chip(arm.current.balance, arm.prev.balance)|safe }}{% endif %}</div>
+        <div class="num-card arm"><div class="nv sm">{{ arm.current.svr }}</div><div class="nl">SVR</div>{% if arm.prev %}{{ chip(arm.current.svr, arm.prev.svr)|safe }}{% endif %}</div>
       </div>
     </div>
   </div>
@@ -1412,11 +1414,12 @@ def build_body_scan_dots(data: dict) -> str:
         color = jcolor(val)
         dots += (
             f'<div style="position:absolute;left:{x}%;top:{y}%;transform:translate(-50%,-50%);'
-            f'width:13%;aspect-ratio:1;border-radius:50%;background:{color};'
+            f'width:26px;height:26px;min-width:26px;min-height:26px;max-width:26px;max-height:26px;'
+            f'border-radius:50%;background:{color};box-sizing:border-box;'
             f'border:1.5px solid rgba(255,255,255,0.5);'
             f'display:flex;flex-direction:column;align-items:center;justify-content:center;'
             f'box-shadow:0 0 8px {color}CC;z-index:3;">'
-            f'<span style="font-family:Bebas Neue,sans-serif;font-size:10px;color:#fff;line-height:1;">{val}%</span>'
+            f'<span style="font-family:Bebas Neue,sans-serif;font-size:10px;color:#fff;line-height:1;">{val}</span>'
             f'<span style="font-size:5.5px;color:rgba(255,255,255,0.9);line-height:1.3;">{short}</span></div>'
         )
     return dots
