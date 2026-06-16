@@ -1415,12 +1415,14 @@ def _map_inbody(rows: list) -> dict:
     # Trend across all sessions
     trend = [
         {
-            "session":  _fmt_label(r["test_date"]),
-            "weight":   round(_safe_float(r.get("weight")), 1),
-            "smm":      round(_safe_float(r.get("smm")), 1),
-            "pbf":      round(_safe_float(r.get("pbf")), 1),
-            "bmi":      round(_safe_float(r.get("bmi")), 1),
-            "score":    int(_safe_float(r.get("inbody_score"))),
+            "session":     _fmt_label(r["test_date"]),
+            "weight":      round(_safe_float(r.get("weight")), 1),
+            "smm":         round(_safe_float(r.get("smm")), 1),
+            "pbf":         round(_safe_float(r.get("pbf")), 1),
+            "bmi":         round(_safe_float(r.get("bmi")), 1),
+            "score":       int(_safe_float(r.get("inbody_score"))),
+            "bmr":         int(_safe_float(r.get("bmr"))),
+            "phase_angle": round(_safe_float(r.get("phase_angle_50khz")), 1),
         }
         for r in rows
     ]
@@ -1549,7 +1551,8 @@ def load_athlete_data(athlete_name: str) -> dict:
     # ── Map to DATA dict shape ───────────────────────────────────────────────
     def _dari_trend(rows):
         return [{"session":       _fmt_label(r["session_ts"]),
-                 "athleticism":   _safe_float(r["score_overall"]),
+                 "overall":       _safe_float(r["score_overall"]),
+                 "athleticism":   _safe_float(r["score_vulnerability"]),
                  "functionality": _safe_float(r["score_function"]),
                  "explosiveness": _safe_float(r["score_explosive"]),
                  "dysfunction":   _safe_float(r["score_dysfunction"])} for r in rows]
@@ -1567,7 +1570,7 @@ def load_athlete_data(athlete_name: str) -> dict:
                  "balance":        round(_safe_float(r["shoulder_balance"]), 2),
                  "svr":            round(_safe_float(r["svr"]), 2)} for r in rows]
 
-    empty_dari = {"session": "N/A", "athleticism": 0, "functionality": 0,
+    empty_dari = {"session": "N/A", "overall": 0, "athleticism": 0, "functionality": 0,
                   "explosiveness": 0, "dysfunction": 0}
     empty_vald = {"session": "N/A", "jump_height": 0, "peak_power": 0, "rsi_mod": 0}
     empty_arm  = {"session": "N/A", "arm_score": 0, "total_strength": 0,

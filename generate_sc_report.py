@@ -52,12 +52,12 @@ DATA = {
     # DARI — Athletic Movement Assessment
     "dari": {
         "trend": [
-            {"session": "Sep '25", "athleticism": 84.7, "functionality": 73.2, "explosiveness": 99.4, "dysfunction": 3.1},
-            {"session": "Nov '25", "athleticism": 86.0, "functionality": 79.7, "explosiveness": 95.0, "dysfunction": 2.8},
-            {"session": "Dec '25", "athleticism": 85.2, "functionality": 79.6, "explosiveness": 95.1, "dysfunction": 4.2},
-            {"session": "Jan '26", "athleticism": 83.3, "functionality": 74.1, "explosiveness": 97.7, "dysfunction": 5.2},
+            {"session": "Sep '25", "overall": 88.1, "athleticism": 84.7, "functionality": 73.2, "explosiveness": 99.4, "dysfunction": 3.1},
+            {"session": "Nov '25", "overall": 90.4, "athleticism": 86.0, "functionality": 79.7, "explosiveness": 95.0, "dysfunction": 2.8},
+            {"session": "Dec '25", "overall": 89.0, "athleticism": 85.2, "functionality": 79.6, "explosiveness": 95.1, "dysfunction": 4.2},
+            {"session": "Jan '26", "overall": 86.5, "athleticism": 83.3, "functionality": 74.1, "explosiveness": 97.7, "dysfunction": 5.2},
         ],
-        "current": {"athleticism": 83.3, "functionality": 74.1, "explosiveness": 97.7, "dysfunction": 5.2},
+        "current": {"overall": 86.5, "athleticism": 83.3, "functionality": 74.1, "explosiveness": 97.7, "dysfunction": 5.2},
         "percentiles": {"athleticism": 83, "explosiveness": 98, "dysfunction": 35, "vulnerability": 30},
         "focus_areas": ["R Knee Kinetics", "L Knee Kinetics", "R Shoulder Align."],
     },
@@ -88,11 +88,20 @@ DATA = {
 
     # InBody — Body Composition
     "inbody": {
+        "available": True,
         "weight": 207.7,
+        "weight_lbs": 207.7,
         "smm":    93.5,
+        "smm_lbs": 93.5,
         "pbf":    22.1,
         "bmi":    29.0,
         "score":  85,
+        "bmr": 2150,
+        "phase_angle": 7.2,
+        "trend": [
+            {"session": "Nov '25", "weight": 210.2, "smm": 92.0, "pbf": 24.8, "bmi": 29.4, "score": 82, "bmr": 2120, "phase_angle": 7.0},
+            {"session": "Jan '26", "weight": 207.7, "smm": 93.5, "pbf": 22.1, "bmi": 29.0, "score": 85, "bmr": 2150, "phase_angle": 7.2},
+        ],
         "segments": [
             {"segment": "R Arm",  "lean_mass": 10.94, "highlight": True},
             {"segment": "L Arm",  "lean_mass":  8.62, "highlight": False},
@@ -1077,13 +1086,15 @@ def build_summary_kpis(data):
 
 def build_decline_flags(data):
     """
-    Check key tracked metrics for a >=10% change from the previous session.
-    Dysfunction flags on increase (higher = worse); all others flag on decline.
+    Check key tracked metrics for meaningful change from the previous session.
+    Each metric can be flagged by a percent-change threshold, an absolute-point
+    threshold, or either (whichever triggers first). Dysfunction and Body Fat %
+    flag on increase (higher = worse); all others flag on decline.
     """
-    THRESHOLD = 0.10
     flags = []
 
-    def _check(source, metric, curr_val, prev_val, fmt="{:.1f}", invert=False):
+    def _check(source, metric, curr_val, prev_val, fmt="{:.1f}",
+               invert=False, pct_threshold=0.10, point_threshold=None):
         if prev_val is None or curr_val is None:
             return
         try:
@@ -1093,45 +1104,77 @@ def build_decline_flags(data):
             return
         if p == 0 or c == 0:
             return
-        pct = (c - p) / abs(p)
-        triggered = (pct >= THRESHOLD) if invert else (pct <= -THRESHOLD)
-        if triggered:
+
+        delta = c - p
+        pct   = delta / abs(p)
+
+        # Percent-based trigger: only fires in the unfavorable direction
+        pct_triggered = (pct >= pct_threshold) if invert else (pct <= -pct_threshold)
+
+        # Point-based trigger (optional): fires on magnitude of change in
+        # EITHER direction — display color (red/green) is decided separately
+        point_triggered = False
+        if point_threshold is not None:
+            point_triggered = abs(delta) >= point_threshold
+
+        if pct_triggered or point_triggered:
             direction = f"+{pct*100:.1f}%" if pct > 0 else f"{pct*100:.1f}%"
+            # For invert metrics (higher = worse, e.g. dysfunction, body fat),
+            # a decrease is the improvement. For normal metrics, an increase is.
+            is_improvement = (delta < 0) if invert else (delta > 0)
             flags.append({
                 "source": source,
                 "metric": metric,
                 "prev":   fmt.format(p),
                 "curr":   fmt.format(c),
                 "pct":    direction,
+                "trend":  "improve" if is_improvement else "decline",
             })
 
     # ── DARI ──────────────────────────────────────────────────────────────────
+    # Overall score: flag on 3-point change OR 5% change (either triggers)
+    # All other tracked DARI metrics: 7.5% change threshold
     dari_trend = data["dari"]["trend"]
     if len(dari_trend) >= 2:
         c, p = dari_trend[-1], dari_trend[-2]
-        _check("Dari", "Athleticism",   c["athleticism"],   p["athleticism"])
-        _check("Dari", "Functionality", c["functionality"], p["functionality"])
-        _check("Dari", "Explosiveness", c["explosiveness"], p["explosiveness"])
+        _check("Dari", "Overall Score",  c["overall"],       p["overall"],
+               pct_threshold=0.05, point_threshold=3)
+        _check("Dari", "Athleticism",   c["athleticism"],   p["athleticism"],   pct_threshold=0.075)
+        _check("Dari", "Functionality", c["functionality"], p["functionality"], pct_threshold=0.075)
+        _check("Dari", "Explosiveness", c["explosiveness"], p["explosiveness"], pct_threshold=0.075)
         _check("Dari", "Dysfunction",   c["dysfunction"],   p["dysfunction"],
-               invert=True)  # higher = worse
+               invert=True, pct_threshold=0.075)  # higher = worse
 
     # ── VALD ──────────────────────────────────────────────────────────────────
+    # 10% change threshold across the board
     vald_trend = data["vald"]["trend"]
     if len(vald_trend) >= 2:
         c, p = vald_trend[-1], vald_trend[-2]
-        _check("Vald", "Jump Height",  c["jump_height"], p["jump_height"], "{:.2f}")
-        _check("Vald", "Peak Power",   c["peak_power"],  p["peak_power"],  "{:,.0f}")
-        _check("Vald", "RSI-Modified", c["rsi_mod"],     p["rsi_mod"],     "{:.3f}")
+        _check("Vald", "Jump Height",  c["jump_height"], p["jump_height"], "{:.2f}", pct_threshold=0.10)
+        _check("Vald", "Peak Power",   c["peak_power"],  p["peak_power"],  "{:,.0f}", pct_threshold=0.10)
+        _check("Vald", "RSI-Modified", c["rsi_mod"],     p["rsi_mod"],     "{:.3f}", pct_threshold=0.10)
 
     # ── ArmCare ───────────────────────────────────────────────────────────────
+    # Arm Score: 5-point change threshold
+    # Total Strength: 10% change threshold
+    # SVR/Balance/Velo: unchanged 10% default
     arm_trend = data["arm"]["trend"]
     if len(arm_trend) >= 2:
         c, p = arm_trend[-1], arm_trend[-2]
-        _check("ArmCare", "Arm Score",      c["arm_score"],      p["arm_score"])
-        _check("ArmCare", "Total Strength", c["total_strength"], p["total_strength"], "{:.1f}")
-        _check("ArmCare", "SVR",            c["svr"],            p["svr"],            "{:.2f}")
-        _check("ArmCare", "Balance",        c["balance"],        p["balance"],        "{:.2f}")
-        _check("ArmCare", "Velo",           c.get("velo", 0),    p.get("velo", 0),    "{:.1f}")
+        _check("ArmCare", "Arm Score",      c["arm_score"],      p["arm_score"],
+               point_threshold=5, pct_threshold=999)  # point-only: disable pct path
+        _check("ArmCare", "Total Strength", c["total_strength"], p["total_strength"], "{:.1f}", pct_threshold=0.10)
+        _check("ArmCare", "SVR",            c["svr"],            p["svr"],            "{:.2f}", pct_threshold=0.10)
+        _check("ArmCare", "Balance",        c["balance"],        p["balance"],        "{:.2f}", pct_threshold=0.10)
+        _check("ArmCare", "Velo",           c.get("velo", 0),    p.get("velo", 0),    "{:.1f}", pct_threshold=0.10)
+
+    # ── InBody ────────────────────────────────────────────────────────────────
+    # Body Fat %: flag on 3-point change (point-only). Increase = worse (invert=True)
+    inbody_trend = (data.get("inbody") or {}).get("trend") or []
+    if len(inbody_trend) >= 2:
+        c, p = inbody_trend[-1], inbody_trend[-2]
+        _check("InBody", "Body Fat %", c["pbf"], p["pbf"], "{:.1f}",
+               invert=True, point_threshold=3, pct_threshold=999)  # point-only: disable pct path
 
     # Sort by absolute % change — largest first
     flags.sort(key=lambda f: -abs(float(f["pct"].replace("%","").replace("+",""))))
@@ -1174,6 +1217,16 @@ html,body{background:var(--bg);color:#E8F0F8;font-family:'Barlow Condensed',sans
 @media print{.page-break{page-break-before:always;}}
 .p1-grid{display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;
   gap:8px;padding:8px;height:calc(100vh - 58px);min-height:680px;}
+@media (max-width:768px){
+  .p1-grid{grid-template-columns:1fr;grid-template-rows:auto;height:auto;min-height:unset;}
+  .p2-grid{grid-template-columns:1fr !important;}
+  .hdr-name{font-size:20px;letter-spacing:2px;}
+  .hdr{height:auto;padding:10px 14px;flex-wrap:wrap;gap:4px;}
+  .dari-layout{flex-direction:column;}
+  .dari-scan-wrap{height:280px;width:100%;}
+  .card-body{overflow:visible;}
+  .dari-scores{width:100%;padding-top:8px;}
+}
 .card{background:var(--panel);border-radius:10px;overflow:hidden;display:flex;flex-direction:column;border:1px solid var(--border);}
 .card-hdr{display:flex;align-items:center;padding:0 14px;height:48px;border-bottom:2px solid;flex-shrink:0;}
 .card-hdr.dari  {border-color:var(--dari);background:rgba(56,163,165,0.15);}
@@ -1207,20 +1260,7 @@ html,body{background:var(--bg);color:#E8F0F8;font-family:'Barlow Condensed',sans
 .flag-hdr{background:rgba(239,68,68,0.65);padding:6px 14px;font-family:'Bebas Neue',sans-serif;font-size:15px;letter-spacing:2px;color:#fff;}
 .flag-ok{padding:10px 14px;font-size:12px;color:#22c55e;}
 .flag-item{padding:6px 14px;font-size:11px;color:#EF4444;}
-@media (max-width:768px){
-  .p1-grid{grid-template-columns:1fr;grid-template-rows:auto;height:auto;min-height:unset;}
-  .p2-grid{grid-template-columns:1fr !important;}
-  .hdr-name{font-size:20px;letter-spacing:2px;}
-  .hdr{height:auto;padding:10px 14px;flex-wrap:wrap;gap:4px;}
-  .card{height:auto;overflow:visible;}
-  .card-body{overflow:visible;}
-  .dari-layout{flex-direction:column;overflow:visible;flex:none;}
-  .dari-scan-wrap{height:280px!important;width:100%;flex-shrink:0;}
-  .dari-scores{width:100%;padding-top:8px;flex:none;}
-  .body-dot{width:19.5px!important;height:19.5px!important;min-width:19.5px!important;min-height:19.5px!important;max-width:19.5px!important;max-height:19.5px!important;}
-  .body-dot span:first-child{font-size:8px!important;}
-  .body-dot span:last-child{font-size:4px!important;}
-}
+.flag-item.improve{color:#22c55e;}
 </style>
 </head>
 <body>
@@ -1255,6 +1295,7 @@ html,body{background:var(--bg);color:#E8F0F8;font-family:'Barlow Condensed',sans
         </div>
         <div class="dari-scores">
           <div class="lbl">Athleticism Scores</div>
+          <div class="sr"><div class="sn">Overall Score</div><div class="sb"><div class="sbf" style="width:{{ dari.current.overall }}%;background:var(--dari);"></div></div><div class="sv" style="color:var(--dari);">{{ dari.current.overall }}</div>{% if dari_prev.overall is defined %}{{ chip(dari.current.overall, dari_prev.overall)|safe }}{% endif %}</div>
           <div class="sr"><div class="sn">Athleticism</div><div class="sb"><div class="sbf" style="width:{{ dari.current.athleticism }}%;background:var(--dari);"></div></div><div class="sv" style="color:var(--dari);">{{ dari.current.athleticism }}</div>{% if dari_prev.athleticism is defined %}{{ chip(dari.current.athleticism, dari_prev.athleticism)|safe }}{% endif %}</div>
           <div class="sr"><div class="sn">Functionality</div><div class="sb"><div class="sbf" style="width:{{ dari.current.functionality }}%;background:var(--dari);"></div></div><div class="sv" style="color:var(--dari);">{{ dari.current.functionality }}</div>{% if dari_prev.functionality is defined %}{{ chip(dari.current.functionality, dari_prev.functionality)|safe }}{% endif %}</div>
           <div class="sr"><div class="sn">Explosiveness</div><div class="sb"><div class="sbf" style="width:{{ dari.current.explosiveness }}%;background:var(--dari);"></div></div><div class="sv" style="color:var(--dari);">{{ dari.current.explosiveness }}</div>{% if dari_prev.explosiveness is defined %}{{ chip(dari.current.explosiveness, dari_prev.explosiveness)|safe }}{% endif %}</div>
@@ -1291,9 +1332,10 @@ html,body{background:var(--bg);color:#E8F0F8;font-family:'Barlow Condensed',sans
         <div class="num-card arm"><div class="nv lg">{{ arm.current.total_strength }}<span class="nu"> lbs</span></div><div class="nl">Total Strength</div>{% if arm.prev %}{{ chip(arm.current.total_strength, arm.prev.total_strength)|safe }}{% endif %}</div>
       </div>
       <div class="div"></div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
-        <div class="num-card arm"><div class="nv lg">{{ arm.current.balance }}</div><div class="nl">Balance</div>{% if arm.prev %}{{ chip(arm.current.balance, arm.prev.balance)|safe }}{% endif %}</div>
-        <div class="num-card arm"><div class="nv lg">{{ arm.current.svr }}</div><div class="nl">SVR</div>{% if arm.prev %}{{ chip(arm.current.svr, arm.prev.svr)|safe }}{% endif %}</div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;">
+        <div class="num-card arm"><div class="nv sm">{{ arm.current.velo or "—" }}</div><div class="nl">Velo (mph)</div></div>
+        <div class="num-card arm"><div class="nv sm">{{ arm.current.balance }}</div><div class="nl">Balance</div>{% if arm.prev %}{{ chip(arm.current.balance, arm.prev.balance)|safe }}{% endif %}</div>
+        <div class="num-card arm"><div class="nv sm">{{ arm.current.svr }}</div><div class="nl">SVR</div>{% if arm.prev %}{{ chip(arm.current.svr, arm.prev.svr)|safe }}{% endif %}</div>
       </div>
     </div>
   </div>
@@ -1305,11 +1347,11 @@ html,body{background:var(--bg);color:#E8F0F8;font-family:'Barlow Condensed',sans
       {% if inbody.available %}
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
         <div class="num-card inbody"><div class="nv lg">{{ inbody.score }}<span class="nu">/100</span></div><div class="nl">InBody Score</div>{% if inbody_prev.score is defined %}{{ chip(inbody.score, inbody_prev.score)|safe }}{% endif %}</div>
-        <div class="num-card inbody"><div class="nv lg">{{ inbody.weight_lbs }}<span class="nu"> lbs</span></div><div class="nl">Body Weight</div>{% if inbody_prev.weight_lbs is defined %}{{ chip(inbody.weight_lbs, inbody_prev.weight_lbs)|safe }}{% endif %}</div>
+        <div class="num-card inbody"><div class="nv lg">{{ inbody.weight_lbs }}<span class="nu"> lbs</span></div><div class="nl">Body Weight</div>{% if inbody_prev.weight is defined %}{{ chip(inbody.weight_lbs, inbody_prev.weight)|safe }}{% endif %}</div>
       </div>
       <div class="div"></div>
       <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;">
-        <div class="num-card inbody"><div class="nv sm">{{ inbody.smm_lbs }}</div><div class="nl">SMM (lbs)</div>{% if inbody_prev.smm_lbs is defined %}{{ chip(inbody.smm_lbs, inbody_prev.smm_lbs)|safe }}{% endif %}</div>
+        <div class="num-card inbody"><div class="nv sm">{{ inbody.smm_lbs }}</div><div class="nl">SMM (lbs)</div>{% if inbody_prev.smm is defined %}{{ chip(inbody.smm_lbs, inbody_prev.smm)|safe }}{% endif %}</div>
         <div class="num-card inbody"><div class="nv sm">{{ inbody.pbf }}%</div><div class="nl">Body Fat</div>{% if inbody_prev.pbf is defined %}{{ chip(inbody.pbf, inbody_prev.pbf, invert=True)|safe }}{% endif %}</div>
         <div class="num-card inbody"><div class="nv sm">{{ inbody.bmr }}</div><div class="nl">BMR kcal</div>{% if inbody_prev.bmr is defined %}{{ chip(inbody.bmr, inbody_prev.bmr)|safe }}{% endif %}</div>
         <div class="num-card inbody"><div class="nv sm">{{ inbody.phase_angle }}°</div><div class="nl">Phase Angle</div>{% if inbody_prev.phase_angle is defined %}{{ chip(inbody.phase_angle, inbody_prev.phase_angle)|safe }}{% endif %}</div>
@@ -1375,15 +1417,15 @@ html,body{background:var(--bg);color:#E8F0F8;font-family:'Barlow Condensed',sans
 
 {% if decline_flags %}
 <div class="flag-panel">
-  <div class="flag-hdr">⚠ Performance Flags — ≥10% Change from Previous Session</div>
+  <div class="flag-hdr">⚠ Performance Flags — Threshold Changes from Previous Session</div>
   {% for f in decline_flags %}
-  <div class="flag-item">{{ f.src }} — {{ f.metric }}: {{ f.prev }} → {{ f.curr }} ({{ f.pct }})</div>
+  <div class="flag-item {{ f.trend }}">{{ f.source }} — {{ f.metric }}: {{ f.prev }} → {{ f.curr }} ({{ f.pct }})</div>
   {% endfor %}
 </div>
 {% else %}
 <div class="flag-panel">
-  <div class="flag-hdr">⚠ Performance Flags — ≥10% Change from Previous Session</div>
-  <div class="flag-ok">✓ No significant declines detected across tracked metrics.</div>
+  <div class="flag-hdr">⚠ Performance Flags — Threshold Changes from Previous Session</div>
+  <div class="flag-ok">✓ No significant changes detected across tracked metrics.</div>
 </div>
 {% endif %}
 
@@ -1399,33 +1441,31 @@ def build_body_scan_dots(data: dict) -> str:
         if v < 60:  return "#F59E0B"
         return "#EF4444"
     positions = [
-        ("RS",  26, 17, "r_shoulder"),
-        ("LS",  74, 17, "l_shoulder"),
+        ("RS",  30, 18, "r_shoulder"),
+        ("LS",  70, 18, "l_shoulder"),
         ("US",  50, 23, "upper_spine"),
-        ("ABD", 50, 40, "lower_spine"),
-        ("RH",  30, 54, "r_hip"),
-        ("LH",  70, 54, "l_hip"),
-        ("RK",  32, 71, "r_knee"),
-        ("LK",  68, 71, "l_knee"),
-        ("RA",  34, 89, "r_ankle"),
-        ("LA",  66, 89, "l_ankle"),
+        ("ABD", 50, 38, "lower_spine"),
+        ("RH",  34, 53, "r_hip"),
+        ("LH",  66, 53, "l_hip"),
+        ("RK",  35, 70, "r_knee"),
+        ("LK",  65, 70, "l_knee"),
+        ("RA",  37, 88, "r_ankle"),
+        ("LA",  63, 88, "l_ankle"),
     ]
     dots = ""
     for short, x, y, key in positions:
-        val = round(joints.get(key) or 0)
+        val = joints.get(key) or 0
         color = jcolor(val)
         dots += (
-            f'<div class="body-dot" style="position:absolute;left:{x}%;top:{y}%;transform:translate(-50%,-50%);'
-            f'width:26px;height:26px;min-width:26px;min-height:26px;max-width:26px;max-height:26px;'
-            f'border-radius:50%;background:{color};box-sizing:border-box;'
+            f'<div style="position:absolute;left:{x}%;top:{y}%;transform:translate(-50%,-50%);'
+            f'width:30px;height:30px;border-radius:50%;background:{color};'
             f'border:1.5px solid rgba(255,255,255,0.5);'
             f'display:flex;flex-direction:column;align-items:center;justify-content:center;'
             f'box-shadow:0 0 8px {color}CC;z-index:3;">'
-            f'<span style="font-family:Bebas Neue,sans-serif;font-size:10px;color:#fff;line-height:1;">{val}</span>'
+            f'<span style="font-family:Bebas Neue,sans-serif;font-size:10px;color:#fff;line-height:1;">{val}%</span>'
             f'<span style="font-size:5.5px;color:rgba(255,255,255,0.9);line-height:1.3;">{short}</span></div>'
         )
     return dots
-
 
 
 def render_report(data: dict, out_path: str):
