@@ -57,7 +57,8 @@ DATA = {
             {"session": "Dec '25", "overall": 89.0, "athleticism": 85.2, "functionality": 79.6, "explosiveness": 95.1, "dysfunction": 4.2},
             {"session": "Jan '26", "overall": 86.5, "athleticism": 83.3, "functionality": 74.1, "explosiveness": 97.7, "dysfunction": 5.2},
         ],
-        "current": {"overall": 86.5, "athleticism": 83.3, "functionality": 74.1, "explosiveness": 97.7, "dysfunction": 5.2, "dp7_jump_height": 0.526},
+        "current": {"overall": 86.5, "athleticism": 83.3, "functionality": 74.1, "explosiveness": 97.7, "dysfunction": 5.2},
+        "vj": 0.526,
         "percentiles": {"athleticism": 83, "explosiveness": 98, "dysfunction": 35, "vulnerability": 30},
         "focus_areas": ["R Knee Kinetics", "L Knee Kinetics", "R Shoulder Align."],
     },
@@ -1338,9 +1339,9 @@ html,body{background:var(--bg);color:#E8F0F8;font-family:'Barlow Condensed',sans
             </div>
             <div style="width:110px;flex-shrink:0;display:flex;flex-direction:column;">
               <div class="lbl">Vertical Jump</div>
-              {% if dari.current.dp7_jump_height %}
+              {% if dari.vj %}
               <div class="num-card dari" style="margin-top:4px;flex:1;justify-content:center;">
-                <div class="nv sm" style="color:var(--dari);">{{ "%.1f"|format(dari.current.dp7_jump_height * 39.37) }}<span class="nu">in</span></div>
+                <div class="nv sm" style="color:var(--dari);">{{ "%.1f"|format(dari.vj * 39.37) }}<span class="nu">in</span></div>
                 <div class="nl">DARI Vertical</div>
               </div>
               {% endif %}
