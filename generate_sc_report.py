@@ -1257,6 +1257,9 @@ html,body{background:var(--bg);color:#E8F0F8;font-family:'Barlow Condensed',sans
 .sv{font-family:'Bebas Neue',sans-serif;font-size:20px;width:44px;text-align:right;}
 .div{height:1px;background:var(--border);margin:2px 0;flex-shrink:0;}
 .lbl{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:1px;flex-shrink:0;}
+.focus-item{display:flex;align-items:center;gap:8px;padding:6px 8px;background:rgba(255,255,255,0.03);border-radius:6px;margin-bottom:5px;}
+.focus-num{width:18px;height:18px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-family:'Bebas Neue',sans-serif;font-size:11px;color:#fff;}
+.focus-name{font-size:11px;color:#C5D6E8;font-weight:600;}
 .p2-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:8px;}
 .p2-card{background:var(--panel);border-radius:10px;border:1px solid var(--border);overflow:hidden;}
 .p2-hdr{padding:0 14px;height:42px;display:flex;align-items:center;gap:8px;
@@ -1322,6 +1325,14 @@ html,body{background:var(--bg);color:#E8F0F8;font-family:'Barlow Condensed',sans
           <div class="sr"><div class="sn">Vulnerability</div><div class="sb"><div class="sbf" style="width:{{ dari.current.athleticism|round(2) }}%;background:var(--dari);"></div></div><div class="sv" style="color:var(--dari);">{{ dari.current.athleticism|round(2) }}</div>{% if dari_prev.athleticism is defined %}{{ chip(dari.current.athleticism, dari_prev.athleticism)|safe }}{% endif %}</div>
           <div class="sr"><div class="sn">Dysfunction</div><div class="sb"><div class="sbf" style="width:{{ (dari.current.dysfunction * 10)|round(2) }}%;background:#ef4444;"></div></div><div class="sv" style="color:#ef4444;">{{ dari.current.dysfunction|round(2) }}</div>{% if dari_prev.dysfunction is defined %}{{ chip(dari.current.dysfunction, dari_prev.dysfunction, invert=True)|safe }}{% endif %}</div>
 
+          <div class="div"></div>
+          <div class="lbl">Focus Areas</div>
+          {% for f in focus_list %}
+          <div class="focus-item">
+            <div class="focus-num" style="background:{{ f.color }};">{{ f.rank }}</div>
+            <div class="focus-name">{{ f.name }}</div>
+          </div>
+          {% endfor %}
         </div>
       </div>
     </div>
@@ -1518,6 +1529,7 @@ def render_report(data: dict, out_path: str):
         inbody_prev    = inbody_prev,
         body_scan_dots = build_body_scan_dots(data),
         decline_flags  = build_decline_flags(data),
+        focus_list     = build_focus_list(data),
         # page 2 charts
         chart_dari_trend       = chart_dari_trend(data),
         chart_dari_dysfunction = chart_dari_dysfunction(data),
