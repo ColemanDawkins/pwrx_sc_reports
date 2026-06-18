@@ -195,7 +195,7 @@ def chart_dari_trend(data):
     sessions = [r["session"] for r in rows]
     x = range(len(sessions))
 
-    fig, ax = plt.subplots(figsize=(4.2, 1.8))
+    fig, ax = plt.subplots(figsize=(4.6, 2.7))
     fig.patch.set_alpha(0)
     ax.set_facecolor("none")
 
@@ -236,7 +236,7 @@ def chart_dari_trend(data):
               framealpha=0, labelcolor=C["grey"], ncol=4, bbox_to_anchor=(0, -0.18))
 
     fig.tight_layout(pad=0.3)
-    return _fig_to_html(fig, 175)
+    return _fig_to_html(fig, 265)
 
 
 def chart_dari_dysfunction(data):
