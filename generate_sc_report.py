@@ -1329,7 +1329,7 @@ html,body{background:var(--bg);color:#E8F0F8;font-family:'Barlow Condensed',sans
 
   <!-- VALD -->
   <div class="card vald">
-    <div class="card-hdr vald"><img src="{{ vald_logo }}" style="height:20px;width:auto;"/></div>
+    <div class="card-hdr vald" style="justify-content:space-between;"><img src="{{ vald_logo }}" style="height:20px;width:auto;"/><span style="font-family:'Bebas Neue',sans-serif;font-size:13px;letter-spacing:2px;text-transform:uppercase;color:var(--vald);">Countermovement Jump</span></div>
     <div class="card-body">
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;">
         <div class="num-card vald"><div class="nv lg">{{ vald.current.jump_height }}</div><div class="nl">Jump Height (in)</div>{% if vald.prev %}{{ chip(vald.current.jump_height, vald.prev.jump_height)|safe }}{% endif %}</div>
