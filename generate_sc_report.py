@@ -189,11 +189,13 @@ def _dynamic_ylim(ax, vals, pad_pct=0.15, min_spread=None):
 
 
 def chart_dari_trend(data):
+    """Combined dual-axis chart: Athleticism/Functionality/Explosiveness (left axis)
+    plotted alongside Dysfunction (right axis, dashed red) on the same chart."""
     rows = data["dari"]["trend"]
     sessions = [r["session"] for r in rows]
     x = range(len(sessions))
 
-    fig, ax = plt.subplots(figsize=(4.2, 1.5))
+    fig, ax = plt.subplots(figsize=(4.2, 1.8))
     fig.patch.set_alpha(0)
     ax.set_facecolor("none")
 
@@ -215,11 +217,26 @@ def chart_dari_trend(data):
     ax.grid(axis="y", color="#1a2d45", linewidth=0.5, alpha=0.6)
     ax.set_axisbelow(True)
 
-    ax.legend(loc="upper left", fontsize=6, framealpha=0,
-              labelcolor=C["grey"], ncol=3, bbox_to_anchor=(0, -0.18))
+    # ── secondary (right) axis — Dysfunction ──
+    dys_color = "#ef4444"
+    dys_vals = [r["dysfunction"] for r in rows]
+    ax2 = ax.twinx()
+    ax2.set_facecolor("none")
+    ax2.plot(x, dys_vals, color=dys_color, linewidth=1.8, marker="D",
+              markersize=4, linestyle="-", label="Dysfunction")
+    _dynamic_ylim(ax2, dys_vals, pad_pct=0.25, min_spread=3)
+    ax2.tick_params(axis="y", colors=dys_color, labelsize=7)
+    for spine in ax2.spines.values():
+        spine.set_visible(False)
+
+    # combined legend (both axes)
+    lines1, labels1 = ax.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax.legend(lines1 + lines2, labels1 + labels2, loc="upper left", fontsize=6,
+              framealpha=0, labelcolor=C["grey"], ncol=4, bbox_to_anchor=(0, -0.18))
 
     fig.tight_layout(pad=0.3)
-    return _fig_to_html(fig, 150)
+    return _fig_to_html(fig, 175)
 
 
 def chart_dari_dysfunction(data):
@@ -1382,8 +1399,7 @@ html,body{background:var(--bg);color:#E8F0F8;font-family:'Barlow Condensed',sans
   <div class="p2-card">
     <div class="p2-hdr" style="border-bottom:2px solid var(--dari);"><img src="{{ dari_logo }}" style="height:20px;width:auto;"/> Dari — Score Trends</div>
     <div class="p2-body">
-      <div class="cl">Athleticism / Functionality / Explosiveness</div>{{ chart_dari_trend }}
-      <div class="cl">Dysfunction</div>{{ chart_dari_dysfunction }}
+      <div class="cl">Athleticism / Functionality / Explosiveness / Dysfunction</div>{{ chart_dari_trend }}
     </div>
   </div>
   <div class="p2-card">
