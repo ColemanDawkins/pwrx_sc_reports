@@ -1799,21 +1799,51 @@ def generate_pwrx_id(cur) -> str:
 
 
 def search_athletes(query: str) -> list[dict]:
-    """Search master_uid by partial name match. Returns list of matches."""
+    """Search master_uid by partial name match. Returns all IDs + phone cross-reference."""
     conn = get_conn()
     cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("""
-        SELECT master_uid, full_name, first_name, last_name,
-               dari_id, armcare_id, vald_id, pushpress_id
-        FROM master_uid
-        WHERE full_name ILIKE %s
-           OR (first_name || ' ' || last_name) ILIKE %s
-        ORDER BY full_name LIMIT 20
+        SELECT
+            m.master_uid,
+            m.full_name,
+            m.first_name,
+            m.last_name,
+            m.dari_id,
+            m.armcare_id,
+            m.vald_id,
+            m.pushpress_id,
+            m.inbody_uid,
+            MAX(p.phone)       AS pushpress_phone,
+            MAX(i.inbody_uid)  AS inbody_phone
+        FROM master_uid m
+        LEFT JOIN pushpress p ON p.master_uid = m.master_uid
+        LEFT JOIN inbody i    ON i.master_uid = m.master_uid
+        WHERE m.full_name ILIKE %s
+           OR (m.first_name || ' ' || m.last_name) ILIKE %s
+        GROUP BY m.master_uid, m.full_name, m.first_name, m.last_name,
+                 m.dari_id, m.armcare_id, m.vald_id, m.pushpress_id, m.inbody_uid
+        ORDER BY m.full_name LIMIT 20
     """, (f"%{query}%", f"%{query}%"))
     results = [dict(r) for r in cur.fetchall()]
     cur.close()
     conn.close()
     return results
+
+
+def set_inbody_uid(master_uid: str, inbody_uid: str) -> bool:
+    """Set or update the inbody_uid (phone number) for an athlete."""
+    conn = get_conn()
+    cur  = conn.cursor()
+    cur.execute("""
+        UPDATE master_uid
+        SET inbody_uid = %s, updated_at = NOW()
+        WHERE master_uid = %s
+    """, (inbody_uid.strip(), master_uid))
+    updated = cur.rowcount > 0
+    conn.commit()
+    cur.close()
+    conn.close()
+    return updated
 
 
 def create_athlete(first_name: str, last_name: str,

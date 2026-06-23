@@ -55,6 +55,10 @@ class CreateFromImportRequest(BaseModel):
     last_name:  str
 
 
+class SetInbodyUidRequest(BaseModel):
+    inbody_uid: str
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.get("/health")
@@ -285,6 +289,22 @@ class UpdateAthleteIdsRequest(BaseModel):
     dari_id:    Optional[str] = None
     phone:      Optional[str] = None
 
+
+@app.patch("/athletes/{master_uid}/inbody_uid")
+def set_athlete_inbody_uid(master_uid: str, req: SetInbodyUidRequest):
+    """Set or update the inbody_uid (phone number) for an athlete."""
+    try:
+        from sc_db import set_inbody_uid
+        updated = set_inbody_uid(master_uid, req.inbody_uid)
+        if not updated:
+            return JSONResponse({"error": "Athlete not found"}, status_code=404)
+        return {"status": "ok", "master_uid": master_uid, "inbody_uid": req.inbody_uid}
+    except Exception as exc:
+        traceback.print_exc()
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 @app.post("/athletes/update_ids")
 def athlete_update_ids(req: UpdateAthleteIdsRequest):
