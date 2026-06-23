@@ -417,14 +417,16 @@ with tab3:
                     e1, e2 = st.columns(2)
                     new_pushpress = e1.text_input("PushPress ID", value=athlete.get("pushpress_id") or "", key=f"pp_{uid}")
                     new_phone     = e2.text_input("Phone / InBody UID (digits only)", value=athlete.get("inbody_uid") or "", key=f"phone_{uid}")
+                    new_pp_phone  = st.text_input("PushPress Phone (digits only)", value=athlete.get("pushpress_phone") or "", key=f"pp_phone_{uid}")
 
                     if st.button("Save Changes", key=f"save_{uid}"):
                         payload = {"master_uid": uid}
-                        if new_dari      != (athlete.get("dari_id")      or ""): payload["dari_id"]      = new_dari
-                        if new_armcare   != (athlete.get("armcare_id")   or ""): payload["armcare_id"]   = new_armcare
-                        if new_vald      != (athlete.get("vald_id")      or ""): payload["vald_id"]      = new_vald
-                        if new_pushpress != (athlete.get("pushpress_id") or ""): payload["pushpress_id"] = new_pushpress
-                        if new_phone     != (athlete.get("inbody_uid")   or ""): payload["phone"]        = new_phone
+                        if new_dari      != (athlete.get("dari_id")        or ""): payload["dari_id"]      = new_dari
+                        if new_armcare   != (athlete.get("armcare_id")     or ""): payload["armcare_id"]   = new_armcare
+                        if new_vald      != (athlete.get("vald_id")        or ""): payload["vald_id"]      = new_vald
+                        if new_pushpress != (athlete.get("pushpress_id")   or ""): payload["pushpress_id"] = new_pushpress
+                        if new_phone     != (athlete.get("inbody_uid")     or ""): payload["phone"]        = new_phone
+                        if new_pp_phone  != (athlete.get("pushpress_phone") or ""): payload["pp_phone"]   = new_pp_phone
 
                         if len(payload) > 1:  # more than just master_uid
                             try:

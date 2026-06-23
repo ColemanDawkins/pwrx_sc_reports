@@ -291,6 +291,7 @@ class UpdateAthleteIdsRequest(BaseModel):
     vald_id:      Optional[str] = None
     pushpress_id: Optional[str] = None
     phone:        Optional[str] = None
+    pp_phone:     Optional[str] = None
 
 
 @app.patch("/athletes/{master_uid}/inbody_uid")
@@ -321,6 +322,7 @@ def athlete_update_ids(req: UpdateAthleteIdsRequest):
             vald_id=req.vald_id,
             pushpress_id=req.pushpress_id,
             phone=req.phone,
+            pp_phone=req.pp_phone,
         )
         return {"status": "ok", "updated": updated}
     except Exception as exc:

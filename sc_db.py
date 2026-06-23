@@ -1740,7 +1740,7 @@ def sync_inbody_phones(records: list[dict]) -> dict:
 # ATHLETE MANAGEMENT  (PWRX ID generation, creation, back-fill linking)
 def update_athlete_ids(master_uid: str, dari_id: str = None, phone: str = None,
                        armcare_id: str = None, vald_id: str = None,
-                       pushpress_id: str = None) -> dict:
+                       pushpress_id: str = None, pp_phone: str = None) -> dict:
     """
     Update any combination of IDs on a master_uid record.
     Phone is also written to pushpress row and master_uid.inbody_uid.
@@ -1769,12 +1769,9 @@ def update_athlete_ids(master_uid: str, dari_id: str = None, phone: str = None,
 
     if phone is not None:
         clean_phone = re.sub(r"[^0-9]", "", phone)
-        # Write to master_uid table as inbody_uid
         cur.execute("UPDATE master_uid SET inbody_uid = %s WHERE master_uid = %s", (clean_phone, master_uid))
-        # Also write to pushpress row matched by master_uid
         cur.execute("UPDATE pushpress SET phone = %s WHERE master_uid = %s", (clean_phone, master_uid))
         if cur.rowcount == 0:
-            # Fall back to name match
             cur.execute("""
                 UPDATE pushpress SET phone = %s
                 WHERE LOWER(first_name || ' ' || last_name) = (
@@ -1782,6 +1779,11 @@ def update_athlete_ids(master_uid: str, dari_id: str = None, phone: str = None,
                 )
             """, (clean_phone, master_uid))
         updated["phone"] = clean_phone
+
+    if pp_phone is not None:
+        clean_pp = re.sub(r"[^0-9]", "", pp_phone)
+        cur.execute("UPDATE pushpress SET phone = %s WHERE master_uid = %s", (clean_pp, master_uid))
+        updated["pp_phone"] = clean_pp
 
     conn.commit()
     cur.close()
