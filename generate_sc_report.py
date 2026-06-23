@@ -201,7 +201,7 @@ def chart_dari_trend(data):
     ax.set_facecolor("none")
 
     for key, color, label in [
-        ("athleticism",   C["orange"], "Athleticism"),
+        ("athleticism",   C["orange"], "Vulnerability"),
         ("functionality", C["blueL"],  "Functionality"),
         ("explosiveness", C["green"],  "Explosiveness"),
     ]:
