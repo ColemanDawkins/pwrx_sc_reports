@@ -394,9 +394,50 @@ with tab3:
             results = []
 
         if results:
-            df_srch = pd.DataFrame(results)[["master_uid", "full_name", "dari_id", "armcare_id", "vald_id", "pushpress_id"]]
-            df_srch.columns = ["PWRX ID", "Name", "Dari ID", "ArmCare ID", "Vald ID", "PushPress ID"]
-            st.dataframe(df_srch, use_container_width=True, hide_index=True)
+            for athlete in results:
+                uid = athlete["master_uid"]
+                with st.expander(f"**{athlete['full_name']}** — {uid}", expanded=len(results) == 1):
+                    # ── Read-only ID summary ───────────────────────────────
+                    c1, c2, c3 = st.columns(3)
+                    c1.markdown(f"**DARI ID:** `{athlete.get('dari_id') or '—'}`")
+                    c2.markdown(f"**ArmCare ID:** `{athlete.get('armcare_id') or '—'}`")
+                    c3.markdown(f"**Vald ID:** `{athlete.get('vald_id') or '—'}`")
+                    c1.markdown(f"**PushPress ID:** `{athlete.get('pushpress_id') or '—'}`")
+                    c2.markdown(f"**InBody / Phone:** `{athlete.get('inbody_uid') or '—'}`")
+                    c3.markdown(f"**PP Phone on file:** `{athlete.get('pushpress_phone') or '—'}`")
+
+                    st.divider()
+                    st.markdown("##### Edit IDs")
+
+                    # ── Editable fields ────────────────────────────────────
+                    e1, e2, e3 = st.columns(3)
+                    new_dari      = e1.text_input("DARI ID",      value=athlete.get("dari_id")      or "", key=f"dari_{uid}")
+                    new_armcare   = e2.text_input("ArmCare ID",   value=athlete.get("armcare_id")   or "", key=f"armcare_{uid}")
+                    new_vald      = e3.text_input("Vald ID",      value=athlete.get("vald_id")      or "", key=f"vald_{uid}")
+                    e1, e2 = st.columns(2)
+                    new_pushpress = e1.text_input("PushPress ID", value=athlete.get("pushpress_id") or "", key=f"pp_{uid}")
+                    new_phone     = e2.text_input("Phone / InBody UID (digits only)", value=athlete.get("inbody_uid") or "", key=f"phone_{uid}")
+
+                    if st.button("Save Changes", key=f"save_{uid}"):
+                        payload = {"master_uid": uid}
+                        if new_dari      != (athlete.get("dari_id")      or ""): payload["dari_id"]      = new_dari
+                        if new_armcare   != (athlete.get("armcare_id")   or ""): payload["armcare_id"]   = new_armcare
+                        if new_vald      != (athlete.get("vald_id")      or ""): payload["vald_id"]      = new_vald
+                        if new_pushpress != (athlete.get("pushpress_id") or ""): payload["pushpress_id"] = new_pushpress
+                        if new_phone     != (athlete.get("inbody_uid")   or ""): payload["phone"]        = new_phone
+
+                        if len(payload) > 1:  # more than just master_uid
+                            try:
+                                resp = requests.post(API_URL + "/athletes/update_ids", json=payload, timeout=10)
+                                if resp.status_code == 200:
+                                    st.success("IDs updated successfully.")
+                                    st.rerun()
+                                else:
+                                    st.error(f"Error: {resp.json().get('error', 'Unknown error')}")
+                            except Exception as e:
+                                st.error(f"Request failed: {e}")
+                        else:
+                            st.info("No changes detected.")
         else:
             st.info("No athletes found.")
 

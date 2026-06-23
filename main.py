@@ -285,9 +285,12 @@ async def generate_report(athlete_name: str = Form(...)):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class UpdateAthleteIdsRequest(BaseModel):
-    master_uid: str
-    dari_id:    Optional[str] = None
-    phone:      Optional[str] = None
+    master_uid:   str
+    dari_id:      Optional[str] = None
+    armcare_id:   Optional[str] = None
+    vald_id:      Optional[str] = None
+    pushpress_id: Optional[str] = None
+    phone:        Optional[str] = None
 
 
 @app.patch("/athletes/{master_uid}/inbody_uid")
@@ -314,6 +317,9 @@ def athlete_update_ids(req: UpdateAthleteIdsRequest):
         updated = update_athlete_ids(
             master_uid=req.master_uid,
             dari_id=req.dari_id,
+            armcare_id=req.armcare_id,
+            vald_id=req.vald_id,
+            pushpress_id=req.pushpress_id,
             phone=req.phone,
         )
         return {"status": "ok", "updated": updated}

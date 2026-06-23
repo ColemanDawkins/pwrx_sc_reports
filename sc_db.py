@@ -1205,6 +1205,11 @@ def ingest_file(path: str, table: str, verbose: bool = True) -> dict:
             df["test_date"] = pd.to_datetime(
                 df["test_date"], format="%m.%d.%Y %H:%M:%S", errors="coerce"
             ).dt.strftime("%Y-%m-%d")
+        # Age comes in as float (e.g. "29.0") — coerce to int
+        if "Age" in df.columns:
+            df["Age"] = pd.to_numeric(df["Age"], errors="coerce").round().astype("Int64")
+        elif "age" in df.columns:
+            df["age"] = pd.to_numeric(df["age"], errors="coerce").round().astype("Int64")
 
     # Map columns
     df, col_warnings = _map_columns(df)
@@ -1733,34 +1738,41 @@ def sync_inbody_phones(records: list[dict]) -> dict:
 
 
 # ATHLETE MANAGEMENT  (PWRX ID generation, creation, back-fill linking)
-def update_athlete_ids(master_uid: str, dari_id: str = None, phone: str = None) -> dict:
+def update_athlete_ids(master_uid: str, dari_id: str = None, phone: str = None,
+                       armcare_id: str = None, vald_id: str = None,
+                       pushpress_id: str = None) -> dict:
     """
-    Update dari_id on master_uid record and/or phone on pushpress record.
-    Also writes phone to pushpress row if matched by name.
-    Returns what was updated.
+    Update any combination of IDs on a master_uid record.
+    Phone is also written to pushpress row and master_uid.inbody_uid.
+    Returns dict of what was updated.
     """
     import re
     conn = get_conn()
     cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     updated = {}
 
-    if dari_id:
-        cur.execute("""
-            UPDATE master_uid SET dari_id = %s WHERE master_uid = %s
-        """, (dari_id, master_uid))
+    if dari_id is not None:
+        cur.execute("UPDATE master_uid SET dari_id = %s WHERE master_uid = %s", (dari_id or None, master_uid))
         updated["dari_id"] = dari_id
 
-    if phone:
+    if armcare_id is not None:
+        cur.execute("UPDATE master_uid SET armcare_id = %s WHERE master_uid = %s", (armcare_id or None, master_uid))
+        updated["armcare_id"] = armcare_id
+
+    if vald_id is not None:
+        cur.execute("UPDATE master_uid SET vald_id = %s WHERE master_uid = %s", (vald_id or None, master_uid))
+        updated["vald_id"] = vald_id
+
+    if pushpress_id is not None:
+        cur.execute("UPDATE master_uid SET pushpress_id = %s WHERE master_uid = %s", (pushpress_id or None, master_uid))
+        updated["pushpress_id"] = pushpress_id
+
+    if phone is not None:
         clean_phone = re.sub(r"[^0-9]", "", phone)
         # Write to master_uid table as inbody_uid
-        cur.execute("""
-            UPDATE master_uid SET inbody_uid = %s WHERE master_uid = %s
-        """, (clean_phone, master_uid))
-        # Also write to pushpress row matched by master_uid or name
-        cur.execute("""
-            UPDATE pushpress SET phone = %s
-            WHERE master_uid = %s
-        """, (clean_phone, master_uid))
+        cur.execute("UPDATE master_uid SET inbody_uid = %s WHERE master_uid = %s", (clean_phone, master_uid))
+        # Also write to pushpress row matched by master_uid
+        cur.execute("UPDATE pushpress SET phone = %s WHERE master_uid = %s", (clean_phone, master_uid))
         if cur.rowcount == 0:
             # Fall back to name match
             cur.execute("""
