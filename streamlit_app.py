@@ -177,6 +177,34 @@ with tab2:
                 except Exception as exc:
                     st.error("Connection error: " + str(exc))
 
+    st.divider()
+    st.markdown("#### Upload ArmCare Scraper CSV")
+    st.caption("Upload the `armcare_export.csv` produced by the ArmCare scraper. "
+               "Athletes are matched by name. Duplicate (athlete + date) rows are skipped automatically.")
+
+    scraper_file = st.file_uploader("Select armcare_export.csv", type=["csv"], key="armcare_scraper_upload")
+    if scraper_file:
+        st.success(f"File loaded: {scraper_file.name}")
+        if st.button("Ingest ArmCare Scraper Data", type="primary"):
+            with st.spinner("Ingesting... please wait"):
+                try:
+                    resp = requests.post(
+                        API_URL + "/ingest_armcare_scraper",
+                        files={"file": (scraper_file.name, scraper_file.getvalue(), "text/csv")},
+                        timeout=120
+                    )
+                    if resp.status_code == 200:
+                        r = resp.json()
+                        st.success(f"Done! {r['inserted']} rows inserted, {r['skipped']} skipped.")
+                        if r.get("unmatched"):
+                            with st.expander(f"{len(r['unmatched'])} athletes not matched to roster"):
+                                for name in sorted(r["unmatched"]):
+                                    st.write(f"• {name}")
+                    else:
+                        st.error("Error: " + resp.text)
+                except Exception as exc:
+                    st.error("Connection error: " + str(exc))
+
 
 # ── TAB 3: Athletes ───────────────────────────────────────────────────────────
 with tab3:

@@ -390,6 +390,33 @@ def dedup_inbody():
         return JSONResponse({"error": str(exc)}, status_code=500)
 
 
+@app.post("/ingest_armcare_scraper")
+async def ingest_armcare_scraper(file: UploadFile = File(...)):
+    """Ingest a CSV produced by armcare_scraper.py into the armcare table."""
+    tmp_path = None
+    try:
+        contents = await file.read()
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
+            tmp.write(contents)
+            tmp_path = tmp.name
+
+        from sc_db import ingest_armcare_scraper as _ingest
+        result = _ingest(tmp_path)
+
+        return {
+            "status":    "success",
+            "inserted":  result["inserted"],
+            "skipped":   result["skipped"],
+            "unmatched": result["unmatched"],
+        }
+    except Exception as exc:
+        traceback.print_exc()
+        return JSONResponse({"error": str(exc)}, status_code=500)
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":

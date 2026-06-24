@@ -1860,6 +1860,89 @@ def set_inbody_uid(master_uid: str, inbody_uid: str) -> bool:
     return updated
 
 
+def ingest_armcare_scraper(path: str) -> dict:
+    """
+    Ingest a CSV produced by armcare_scraper.py.
+
+    Expected columns: athlete_name, fresh_exam_date, arm_score, svr,
+                      total_strength, total_recovery
+
+    - Matches athletes by full name against master_uid.full_name (case-insensitive)
+    - Skips rows where (master_uid, exam_date) already exists in armcare table
+    - Returns inserted / skipped / unmatched counts
+    """
+    import pandas as pd
+
+    df = pd.read_csv(path, dtype=str)
+    df.columns = [c.strip().lower() for c in df.columns]
+
+    required = {"athlete_name", "fresh_exam_date", "arm_score", "svr",
+                "total_strength", "total_recovery"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"CSV missing columns: {missing}")
+
+    df = df.dropna(subset=["athlete_name", "fresh_exam_date"])
+    df["athlete_name"]    = df["athlete_name"].str.strip()
+    df["fresh_exam_date"] = pd.to_datetime(df["fresh_exam_date"], errors="coerce").dt.date
+    df = df.dropna(subset=["fresh_exam_date"])
+
+    conn = get_conn()
+    cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    # Build name → master_uid lookup
+    cur.execute("SELECT master_uid, full_name FROM master_uid")
+    name_map = {r["full_name"].strip().lower(): r["master_uid"] for r in cur.fetchall()}
+
+    inserted   = 0
+    skipped    = 0
+    unmatched  = []
+
+    for _, row in df.iterrows():
+        name = row["athlete_name"].strip()
+        uid  = name_map.get(name.lower())
+
+        if not uid:
+            unmatched.append(name)
+            skipped += 1
+            continue
+
+        exam_date      = row["fresh_exam_date"]
+        arm_score      = row["arm_score"]      if str(row["arm_score"]).strip()      not in ("", "nan") else None
+        svr            = row["svr"]            if str(row["svr"]).strip()            not in ("", "nan") else None
+        total_strength = row["total_strength"] if str(row["total_strength"]).strip() not in ("", "nan") else None
+        total_recovery = row["total_recovery"] if str(row["total_recovery"]).strip() not in ("", "nan") else None
+
+        try:
+            cur.execute("""
+                INSERT INTO armcare (master_uid, exam_date, arm_score, svr, total_strength)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (master_uid, exam_date) DO NOTHING
+            """, (uid, exam_date, arm_score, svr, total_strength))
+
+            if cur.rowcount == 0:
+                skipped += 1
+            else:
+                inserted += 1
+
+        except Exception as e:
+            print(f"  Row skipped ({name} / {exam_date}): {e}")
+            conn.rollback()
+            skipped += 1
+            continue
+
+        conn.commit()
+
+    cur.close()
+    conn.close()
+
+    return {
+        "inserted":  inserted,
+        "skipped":   skipped,
+        "unmatched": list(set(unmatched)),
+    }
+
+
 def create_athlete(first_name: str, last_name: str,
                    dari_id: str = None, armcare_id: str = None,
                    vald_id: str = None, pushpress_id: str = None) -> dict:
