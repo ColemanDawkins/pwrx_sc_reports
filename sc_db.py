@@ -1077,26 +1077,42 @@ def _link_master_uid(df: pd.DataFrame, table: str, conn) -> pd.DataFrame:
         linked_id = df["master_uid"].notna().sum()
         print(f"  Pass 1 (ID match): linked {linked_id}/{len(df)} rows via {src_col}")
     elif table == "inbody":
-        # InBody: link via phone number (inbody_uid = phone) matched against pushpress.phone
+        # InBody: link via phone number
+        # Pass 1a — match against master_uid.inbody_uid first
+        # Pass 1b — fall back to pushpress.phone
         df["master_uid"] = None
         linked_id = 0
         id_col = "inbody_uid" if "inbody_uid" in df.columns else None
         if id_col:
-            # Build phone -> master_uid lookup from pushpress table
-            # Normalize both sides: strip all non-digits
+            df["_phone_clean"] = df[id_col].str.replace(r"[^0-9]", "", regex=True)
+
+            # Pass 1a: match against master_uid.inbody_uid
+            cur.execute("""
+                SELECT REGEXP_REPLACE(inbody_uid, '[^0-9]', '', 'g') AS phone_clean,
+                       master_uid
+                FROM master_uid
+                WHERE inbody_uid IS NOT NULL
+            """)
+            master_phone_lookup = {row[0]: row[1] for row in cur.fetchall()}
+            df["master_uid"] = df["_phone_clean"].map(master_phone_lookup)
+            linked_1a = df["master_uid"].notna().sum()
+            print(f"  Pass 1a (phone match): linked {linked_1a}/{len(df)} rows via phone → master_uid")
+
+            # Pass 1b: fall back to pushpress.phone for anything still unlinked
             cur.execute("""
                 SELECT REGEXP_REPLACE(p.phone, '[^0-9]', '', 'g') AS phone_clean,
                        p.master_uid
                 FROM pushpress p
                 WHERE p.phone IS NOT NULL AND p.master_uid IS NOT NULL
             """)
-            phone_lookup = {row[0]: row[1] for row in cur.fetchall()}
-            # Normalize inbody phone column
-            df["_phone_clean"] = df[id_col].str.replace(r"[^0-9]", "", regex=True)
-            df["master_uid"] = df["_phone_clean"].map(phone_lookup)
+            pp_phone_lookup = {row[0]: row[1] for row in cur.fetchall()}
+            mask = df["master_uid"].isna()
+            df.loc[mask, "master_uid"] = df.loc[mask, "_phone_clean"].map(pp_phone_lookup)
+            linked_1b = df["master_uid"].notna().sum() - linked_1a
+            print(f"  Pass 1b (phone match): linked {linked_1b} more rows via phone → pushpress")
+
             df = df.drop(columns=["_phone_clean"])
             linked_id = df["master_uid"].notna().sum()
-            print(f"  Pass 1 (phone match): linked {linked_id}/{len(df)} rows via phone → pushpress")
         else:
             print(f"  Pass 1: no ID column found for inbody")
     else:
