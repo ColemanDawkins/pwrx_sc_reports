@@ -205,6 +205,34 @@ with tab2:
                 except Exception as exc:
                     st.error("Connection error: " + str(exc))
 
+    st.divider()
+    st.markdown("#### Upload VALD Single Leg Jump CSV")
+    st.caption("Upload the Single Leg Jump CSV exported from VALD Force Decks. "
+               "Athletes are matched by name. Duplicate (athlete + date + time) rows are skipped automatically.")
+
+    slj_file = st.file_uploader("Select Single Leg Jump CSV", type=["csv"], key="vald_slj_upload")
+    if slj_file:
+        st.success(f"File loaded: {slj_file.name}")
+        if st.button("Ingest Single Leg Jump Data", type="primary"):
+            with st.spinner("Ingesting... please wait"):
+                try:
+                    resp = requests.post(
+                        API_URL + "/ingest_vald_slj",
+                        files={"file": (slj_file.name, slj_file.getvalue(), "text/csv")},
+                        timeout=120
+                    )
+                    if resp.status_code == 200:
+                        r = resp.json()
+                        st.success(f"Done! {r['inserted']} rows inserted, {r['skipped']} skipped.")
+                        if r.get("unmatched"):
+                            with st.expander(f"{len(r['unmatched'])} athletes not matched to roster"):
+                                for name in sorted(r["unmatched"]):
+                                    st.write(f"• {name}")
+                    else:
+                        st.error("Error: " + resp.text)
+                except Exception as exc:
+                    st.error("Connection error: " + str(exc))
+
 
 # ── TAB 3: Athletes ───────────────────────────────────────────────────────────
 with tab3:
