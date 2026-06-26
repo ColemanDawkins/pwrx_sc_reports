@@ -35,7 +35,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-VALID_TABLES = ["master_uid", "pushpress", "dari_motion", "armcare", "vald_performance", "inbody"]
+VALID_TABLES = ["master_uid", "pushpress", "dari_motion", "armcare", "vald_performance", "inbody", "vald_slj"]
 
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
@@ -401,6 +401,33 @@ async def ingest_armcare_scraper(file: UploadFile = File(...)):
             tmp_path = tmp.name
 
         from sc_db import ingest_armcare_scraper as _ingest
+        result = _ingest(tmp_path)
+
+        return {
+            "status":    "success",
+            "inserted":  result["inserted"],
+            "skipped":   result["skipped"],
+            "unmatched": result["unmatched"],
+        }
+    except Exception as exc:
+        traceback.print_exc()
+        return JSONResponse({"error": str(exc)}, status_code=500)
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+
+@app.post("/ingest_vald_slj")
+async def ingest_vald_slj(file: UploadFile = File(...)):
+    """Ingest a Single Leg Jump CSV from VALD Force Decks into the vald_slj table."""
+    tmp_path = None
+    try:
+        contents = await file.read()
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
+            tmp.write(contents)
+            tmp_path = tmp.name
+
+        from sc_db import ingest_vald_slj as _ingest
         result = _ingest(tmp_path)
 
         return {

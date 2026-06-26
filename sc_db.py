@@ -281,6 +281,39 @@ CREATE TABLE IF NOT EXISTS vald_performance (
     uploaded_at                     TIMESTAMPTZ DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS vald_slj (
+    id                          SERIAL PRIMARY KEY,
+    master_uid                  TEXT REFERENCES master_uid(master_uid) ON DELETE SET NULL,
+    athlete_name                TEXT,
+    exam_date                   DATE,
+    exam_time                   TEXT,
+    bw_kg                       NUMERIC,
+    reps_l                      INTEGER,
+    reps_r                      INTEGER,
+    peak_force_l                NUMERIC,
+    peak_force_r                NUMERIC,
+    peak_force_asym_pct         TEXT,
+    jump_height_imp_mom_l       NUMERIC,
+    jump_height_imp_mom_r       NUMERIC,
+    jump_height_imp_mom_asym    TEXT,
+    jump_height_flight_l        NUMERIC,
+    jump_height_flight_r        NUMERIC,
+    jump_height_flight_asym     TEXT,
+    conc_impulse_l              NUMERIC,
+    conc_impulse_r              NUMERIC,
+    conc_impulse_asym           TEXT,
+    uploaded_at                 TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_vald_slj_master ON vald_slj(master_uid);
+CREATE INDEX IF NOT EXISTS idx_vald_slj_date   ON vald_slj(exam_date);
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'vald_slj_unique_session') THEN
+    ALTER TABLE vald_slj ADD CONSTRAINT vald_slj_unique_session UNIQUE (master_uid, exam_date, exam_time);
+  END IF;
+END $$;
+
 CREATE TABLE IF NOT EXISTS inbody (
     id                          SERIAL PRIMARY KEY,
     master_uid                  TEXT REFERENCES master_uid(master_uid) ON DELETE SET NULL,
@@ -1943,6 +1976,132 @@ def ingest_armcare_scraper(path: str) -> dict:
 
         except Exception as e:
             print(f"  Row skipped ({name} / {exam_date}): {e}")
+            conn.rollback()
+            skipped += 1
+            continue
+
+        conn.commit()
+
+    cur.close()
+    conn.close()
+
+    return {
+        "inserted":  inserted,
+        "skipped":   skipped,
+        "unmatched": list(set(unmatched)),
+    }
+
+
+def ingest_vald_slj(path: str) -> dict:
+    """
+    Ingest a Single Leg Jump CSV exported from VALD Force Decks.
+
+    Expected columns (from VALD export):
+        Name, ExternalId, Test Type, Date, Time, BW [KG], Reps (L), Reps (R),
+        Concentric Peak Force [N] (L), Concentric Peak Force [N] (R),
+        Concentric Peak Force [N] (Asym)(%), Jump Height (Imp-Mom) in Inches [in] (L),
+        Jump Height (Imp-Mom) in Inches [in] (R), Jump Height (Imp-Mom) in Inches [in] (Asym)(%),
+        Jump Height (Flight Time) in Inches [in] (L), Jump Height (Flight Time) in Inches [in] (R),
+        Jump Height (Flight Time) in Inches [in] (Asym)(%), Concentric Impulse [N s] (L),
+        Concentric Impulse [N s] (R), Concentric Impulse [N s] (Asym)(%)
+
+    - Matches athletes by full name against master_uid
+    - Skips duplicate (master_uid, exam_date, exam_time) rows
+    - Returns inserted / skipped / unmatched counts
+    """
+    import pandas as pd
+
+    df = pd.read_csv(path, dtype=str)
+    df.columns = [c.strip() for c in df.columns]
+
+    # Column mapping: CSV header → internal name
+    col_map = {
+        "Name":                                                 "athlete_name",
+        "Date":                                                 "exam_date",
+        "Time":                                                 "exam_time",
+        "BW [KG]":                                              "bw_kg",
+        "Reps (L)":                                             "reps_l",
+        "Reps (R)":                                             "reps_r",
+        "Concentric Peak Force [N] (L)":                        "peak_force_l",
+        "Concentric Peak Force [N] (R)":                        "peak_force_r",
+        "Concentric Peak Force [N] (Asym)(%)":                  "peak_force_asym_pct",
+        "Jump Height (Imp-Mom) in Inches [in] (L)":             "jump_height_imp_mom_l",
+        "Jump Height (Imp-Mom) in Inches [in] (R)":             "jump_height_imp_mom_r",
+        "Jump Height (Imp-Mom) in Inches [in] (Asym)(%)":       "jump_height_imp_mom_asym",
+        "Jump Height (Flight Time) in Inches [in] (L)":         "jump_height_flight_l",
+        "Jump Height (Flight Time) in Inches [in] (R)":         "jump_height_flight_r",
+        "Jump Height (Flight Time) in Inches [in] (Asym)(%)":   "jump_height_flight_asym",
+        "Concentric Impulse [N s] (L)":                         "conc_impulse_l",
+        "Concentric Impulse [N s] (R)":                         "conc_impulse_r",
+        "Concentric Impulse [N s] (Asym)(%)":                   "conc_impulse_asym",
+    }
+
+    df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
+    df = df.dropna(subset=["athlete_name", "exam_date"])
+    df["athlete_name"] = df["athlete_name"].str.strip()
+    df["exam_date"]    = pd.to_datetime(df["exam_date"], errors="coerce").dt.date
+    df = df.dropna(subset=["exam_date"])
+
+    conn = get_conn()
+    cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    # Build name → master_uid lookup
+    cur.execute("SELECT master_uid, full_name FROM master_uid")
+    name_map = {r["full_name"].strip().lower(): r["master_uid"] for r in cur.fetchall()}
+
+    inserted  = 0
+    skipped   = 0
+    unmatched = []
+
+    db_cols = [
+        "master_uid", "athlete_name", "exam_date", "exam_time", "bw_kg",
+        "reps_l", "reps_r", "peak_force_l", "peak_force_r", "peak_force_asym_pct",
+        "jump_height_imp_mom_l", "jump_height_imp_mom_r", "jump_height_imp_mom_asym",
+        "jump_height_flight_l", "jump_height_flight_r", "jump_height_flight_asym",
+        "conc_impulse_l", "conc_impulse_r", "conc_impulse_asym",
+    ]
+
+    for _, row in df.iterrows():
+        name = row["athlete_name"].strip()
+        uid  = name_map.get(name.lower())
+
+        if not uid:
+            unmatched.append(name)
+            skipped += 1
+            continue
+
+        def val(col):
+            v = row.get(col, None)
+            if v is None or str(v).strip() in ("", "nan"):
+                return None
+            return str(v).strip()
+
+        values = [
+            uid, name,
+            row["exam_date"],
+            val("exam_time"),
+            val("bw_kg"),
+            val("reps_l"), val("reps_r"),
+            val("peak_force_l"), val("peak_force_r"), val("peak_force_asym_pct"),
+            val("jump_height_imp_mom_l"), val("jump_height_imp_mom_r"), val("jump_height_imp_mom_asym"),
+            val("jump_height_flight_l"), val("jump_height_flight_r"), val("jump_height_flight_asym"),
+            val("conc_impulse_l"), val("conc_impulse_r"), val("conc_impulse_asym"),
+        ]
+
+        try:
+            cur.execute(f"""
+                INSERT INTO vald_slj ({', '.join(db_cols)})
+                VALUES ({', '.join(['%s'] * len(db_cols))})
+                ON CONFLICT (master_uid, exam_date, exam_time) DO NOTHING
+            """, values)
+
+            if cur.rowcount == 0:
+                skipped += 1
+            else:
+                inserted += 1
+
+        except Exception as e:
+            print(f"  Row skipped ({name} / {row['exam_date']}): {e}")
             conn.rollback()
             skipped += 1
             continue
