@@ -1560,6 +1560,7 @@ def load_athlete_data(athlete_name: str) -> dict:
                rsi_modified, eccentric_peak_force_n, bodyweight_lbs
         FROM vald_performance
         WHERE master_uid = %s
+          AND test_type = 'CMJ'
           AND test_date IS NOT NULL
           AND jump_height_flight_in IS NOT NULL
           AND peak_power_w IS NOT NULL
