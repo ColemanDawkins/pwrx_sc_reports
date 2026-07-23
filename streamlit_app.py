@@ -20,7 +20,7 @@ st.markdown(
 )
 st.markdown("---")
 
-tab1, tab2, tab3, tab4 = st.tabs(["Generate Report", "Upload Data", "Athletes", "Roster"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["Generate Report", "Generate Roadmap", "Upload Data", "Athletes", "Roster"])
 
 # Session state for multi-step athlete creation
 if "new_athlete_uid"       not in st.session_state: st.session_state.new_athlete_uid       = None
@@ -84,8 +84,66 @@ with tab1:
         st.info("Could not connect to API or no athletes in database yet.")
 
 
-# ── TAB 2: Upload Data ────────────────────────────────────────────────────────
+# ── TAB 2: Generate Roadmap ────────────────────────────────────────────────────
 with tab2:
+    st.markdown("### Generate Athlete Roadmap")
+    st.caption("Select an athlete to generate their roadmap template (Mechanical Goals, Developmental Goals, S&C Snapshot, Competitive Goals). Goal sections are left blank for editing in Canva.")
+
+    try:
+        roster_resp_rm = requests.get(API_URL + "/roster", timeout=10)
+        roster_data_rm = roster_resp_rm.json().get("roster", [])
+    except Exception:
+        roster_data_rm = []
+
+    if roster_data_rm:
+        active_rm = [
+            r for r in roster_data_rm
+            if (r["dari_sessions"] + r["vald_sessions"] + r["armcare_sessions"]) > 0
+        ]
+        if active_rm:
+            player_names_rm = [r["full_name"] for r in active_rm]
+            selected_rm     = st.selectbox("Select athlete", player_names_rm, key="roadmap_athlete_select")
+            match_rm        = next((r for r in active_rm if r["full_name"] == selected_rm), None)
+            if match_rm:
+                cols = st.columns(4)
+                cols[0].metric("Dari",    match_rm["dari_sessions"])
+                cols[1].metric("Vald",    match_rm["vald_sessions"])
+                cols[2].metric("ArmCare", match_rm["armcare_sessions"])
+                cols[3].metric("InBody",  match_rm.get("inbody_records", 0))
+
+            season_rm = st.text_input("Season / Date (optional)", key="roadmap_season_input",
+                                       placeholder="e.g. Fall 2026")
+
+            if st.button("Generate Roadmap", type="primary", key="generate_roadmap_btn"):
+                with st.spinner("Generating roadmap..."):
+                    try:
+                        response = requests.post(
+                            API_URL + "/generate_roadmap",
+                            data={"athlete_name": selected_rm, "season": season_rm},
+                            timeout=120
+                        )
+                        if response.status_code == 200:
+                            st.success("Roadmap ready!")
+                            safe_name = selected_rm.replace(" ", "_")
+                            st.image(response.content, use_container_width=True)
+                            st.download_button(
+                                label="Download Roadmap PNG",
+                                data=io.BytesIO(response.content),
+                                file_name=f"{safe_name}_roadmap.png",
+                                mime="image/png"
+                            )
+                        else:
+                            st.error("Error: " + response.text)
+                    except Exception as exc:
+                        st.error("Connection error: " + str(exc))
+        else:
+            st.info("No athletes with data yet. Upload files in the Upload Data tab first.")
+    else:
+        st.info("Could not connect to API or no athletes in database yet.")
+
+
+# ── TAB 3: Upload Data ────────────────────────────────────────────────────────
+with tab3:
     st.markdown("### Upload Data to Database")
     st.caption("Upload a CSV or Excel export for any data source. Upload Master UID first.")
 
@@ -234,8 +292,8 @@ with tab2:
                     st.error("Connection error: " + str(exc))
 
 
-# ── TAB 3: Athletes ───────────────────────────────────────────────────────────
-with tab3:
+# ── TAB 4: Athletes ───────────────────────────────────────────────────────────
+with tab4:
     st.markdown("### Athlete Management")
 
     # ── Section A: Multi-step athlete creation ───────────────────────────────
@@ -500,8 +558,8 @@ with tab3:
             st.info("No athletes found.")
 
 
-# ── TAB 4: Roster ─────────────────────────────────────────────────────────────
-with tab4:
+# ── TAB 5: Roster ─────────────────────────────────────────────────────────────
+with tab5:
     st.markdown("### Athletes in Database")
 
     if st.button("Refresh"):

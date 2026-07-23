@@ -289,6 +289,43 @@ async def generate_report(athlete_name: str = Form(...)):
             os.unlink(tmp_path)
 
 
+@app.post("/generate_roadmap")
+async def generate_roadmap(athlete_name: str = Form(...), season: str = Form(None)):
+    """Generate the athlete roadmap PNG (Mechanical/Developmental/S&C/Competitive
+    quadrant template) for the given athlete. Goal sections are left blank for
+    coaches to fill in later in Canva; only the S&C quadrant is populated,
+    using the same DATA dict as /generate_report."""
+    tmp_path = None
+    try:
+        from sc_db import load_athlete_data
+        from generate_roadmap import render_roadmap
+
+        data     = load_athlete_data(athlete_name)
+        out      = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+        out.close()
+        tmp_path = out.name
+        render_roadmap(data, tmp_path, athlete_name=data.get("athlete_name"), season=season)
+
+        with open(tmp_path, "rb") as f:
+            png_bytes = f.read()
+
+        safe_name = athlete_name.replace(" ", "_")
+        return StreamingResponse(
+            io.BytesIO(png_bytes),
+            media_type="image/png",
+            headers={"Content-Disposition": f'attachment; filename="{safe_name}_roadmap.png"'},
+        )
+
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=404)
+    except Exception as exc:
+        traceback.print_exc()
+        return JSONResponse({"error": str(exc)}, status_code=500)
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ─────────────────────────────────────────────────────────────────────────────
