@@ -28,9 +28,20 @@ from typing import Optional
 
 app = FastAPI(title="PWRX S&C Reports API", version="1.0.0")
 
+# CORS: restrict to known origins instead of "*".
+# Set ALLOWED_ORIGINS on Railway to a comma-separated list, e.g.
+#   ALLOWED_ORIGINS=https://your-app.streamlit.app,https://another-domain.com
+# Falls back to local dev origins only if the env var isn't set.
+_default_origins = "http://localhost:8501,http://127.0.0.1:8501"
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get("ALLOWED_ORIGINS", _default_origins).split(",")
+    if origin.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
