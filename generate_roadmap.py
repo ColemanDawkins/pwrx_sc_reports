@@ -179,11 +179,8 @@ def render_roadmap(data: dict, out_path: str, athlete_name: str = None, season: 
 
     # ── Footer ──────────────────────────────────────────────────────────────
     footer_y = H - pad_bottom + 4
-    _text(draw, (pad_x, footer_y), "PWRX ATHLETE DEVELOPMENT ROADMAP — TEMPLATE",
+    _text(draw, (pad_x, footer_y), "PWRX ATHLETE DEVELOPMENT ROADMAP",
           _oswald(19), fill=(255, 255, 255, 70), tracking=1)
-    fnote = "FOR COACH USE — EDIT IN CANVA"
-    fw = draw.textlength(fnote, font=_oswald(19))
-    _text(draw, (W - pad_x - fw, footer_y), fnote, _oswald(19), fill=(255, 255, 255, 70), tracking=1)
 
     img.save(out_path, "PNG")
     return out_path
@@ -321,8 +318,8 @@ def _draw_dari_card(draw, box, dari, current):
     subs_x = divider_x + 24
     subs_right = x1 - 24
     rows = [
-        ("Function", _fmt(dari.get("current", {}).get("functionality"), 1)),
-        ("Explosive", _fmt(dari.get("current", {}).get("explosiveness"), 1)),
+        ("Functionality", _fmt(dari.get("current", {}).get("functionality"), 1)),
+        ("Explosiveness", _fmt(dari.get("current", {}).get("explosiveness"), 1)),
         ("Dysfunction", _fmt(dari.get("current", {}).get("dysfunction"), 1)),
         ("Vulnerability", _fmt(dari.get("percentiles", {}).get("vulnerability"), 1)),
     ]
