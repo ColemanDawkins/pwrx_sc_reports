@@ -1,3 +1,5 @@
+import calendar
+import datetime as dt
 import streamlit as st
 import requests
 import io
@@ -20,7 +22,9 @@ st.markdown(
 )
 st.markdown("---")
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["Generate Report", "Generate Roadmap", "Upload Data", "Athletes", "Roster"])
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
+    ["Generate Report", "Generate Roadmap", "Upload Data", "Athletes", "Roster", "Schedule"]
+)
 
 # Session state for multi-step athlete creation
 if "new_athlete_uid"       not in st.session_state: st.session_state.new_athlete_uid       = None
@@ -28,6 +32,45 @@ if "new_athlete_name"      not in st.session_state: st.session_state.new_athlete
 if "athlete_create_step"   not in st.session_state: st.session_state.athlete_create_step   = 1
 if "dari_id_saved"         not in st.session_state: st.session_state.dari_id_saved         = False
 if "phone_saved"           not in st.session_state: st.session_state.phone_saved           = False
+
+# Session state for the re-test scheduler
+_today = dt.date.today()
+if "cal_year"            not in st.session_state: st.session_state.cal_year            = _today.year
+if "cal_month"           not in st.session_state: st.session_state.cal_month           = _today.month
+if "selected_date"       not in st.session_state: st.session_state.selected_date       = _today
+if "match_result"        not in st.session_state: st.session_state.match_result        = None
+if "pending_slot"        not in st.session_state: st.session_state.pending_slot        = None
+if "confirm_phone_edit"  not in st.session_state: st.session_state.confirm_phone_edit  = False
+
+
+def _sched_api_get(path, **params):
+    try:
+        r = requests.get(f"{API_URL}{path}", params=params, timeout=15)
+        return r.json(), r.status_code
+    except Exception as exc:
+        return {"error": str(exc)}, 500
+
+
+def _sched_api_post(path, json_body):
+    try:
+        r = requests.post(f"{API_URL}{path}", json=json_body, timeout=15)
+        return r.json(), r.status_code
+    except Exception as exc:
+        return {"error": str(exc)}, 500
+
+
+def _sched_api_delete(path):
+    try:
+        r = requests.delete(f"{API_URL}{path}", timeout=15)
+        return r.json(), r.status_code
+    except Exception as exc:
+        return {"error": str(exc)}, 500
+
+
+def _sched_reset_booking_flow():
+    st.session_state.match_result = None
+    st.session_state.pending_slot = None
+    st.session_state.confirm_phone_edit = False
 
 
 # ── TAB 1: Generate Report ────────────────────────────────────────────────────
@@ -607,3 +650,251 @@ with tab5:
 
 st.markdown("---")
 st.caption("PWRX · Strength & Conditioning Data Platform")
+
+# ── TAB 6: Schedule ────────────────────────────────────────────────────────────
+with tab6:
+    st.markdown("### Re-Test Scheduler")
+    st.caption("Book athlete re-test appointments and see who's scheduled each day.")
+
+    cal_col, day_col = st.columns([3, 2], gap="large")
+
+    with cal_col:
+        nav1, nav2, nav3 = st.columns([1, 2, 1])
+        with nav1:
+            if st.button("◀ Prev", use_container_width=True, key="sched_prev"):
+                m = st.session_state.cal_month - 1
+                y = st.session_state.cal_year
+                if m == 0:
+                    m, y = 12, y - 1
+                st.session_state.cal_month, st.session_state.cal_year = m, y
+                st.rerun()
+        with nav2:
+            st.markdown(
+                f"<h4 style='text-align:center;'>"
+                f"{calendar.month_name[st.session_state.cal_month]} {st.session_state.cal_year}"
+                f"</h4>",
+                unsafe_allow_html=True,
+            )
+        with nav3:
+            if st.button("Next ▶", use_container_width=True, key="sched_next"):
+                m = st.session_state.cal_month + 1
+                y = st.session_state.cal_year
+                if m == 13:
+                    m, y = 1, y + 1
+                st.session_state.cal_month, st.session_state.cal_year = m, y
+                st.rerun()
+
+        if st.button("Today", use_container_width=True, key="sched_today"):
+            st.session_state.cal_year = _today.year
+            st.session_state.cal_month = _today.month
+            st.session_state.selected_date = _today
+            st.rerun()
+
+        month_data, sched_status = _sched_api_get(
+            "/schedule/month", year=st.session_state.cal_year, month=st.session_state.cal_month
+        )
+        if sched_status != 200:
+            st.error(f"Could not load calendar: {month_data.get('error', 'unknown error')}")
+            day_counts = {}
+        else:
+            day_counts = {int(k): v for k, v in month_data.get("days", {}).items()}
+
+        weekday_cols = st.columns(7)
+        for i, wd in enumerate(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]):
+            weekday_cols[i].markdown(f"<div style='text-align:center;font-weight:600;'>{wd}</div>", unsafe_allow_html=True)
+
+        weeks = calendar.monthcalendar(st.session_state.cal_year, st.session_state.cal_month)
+        for week in weeks:
+            cols = st.columns(7)
+            for i, day_num in enumerate(week):
+                with cols[i]:
+                    if day_num == 0:
+                        st.write("")
+                        continue
+                    counts = day_counts.get(day_num, {"total": 0, "new": 0, "existing": 0})
+                    this_date = dt.date(st.session_state.cal_year, st.session_state.cal_month, day_num)
+                    label = str(day_num)
+                    if counts["total"]:
+                        label += f"\n🆕{counts.get('new', 0)} ✅{counts.get('existing', 0)}"
+                    is_selected = this_date == st.session_state.selected_date
+                    if st.button(
+                        label,
+                        key=f"sched_day_{day_num}",
+                        use_container_width=True,
+                        type="primary" if is_selected else "secondary",
+                    ):
+                        st.session_state.selected_date = this_date
+                        _sched_reset_booking_flow()
+                        st.rerun()
+
+    with day_col:
+        sel = st.session_state.selected_date
+        st.subheader(sel.strftime("%A, %B %-d, %Y"))
+
+        day_data, sched_status = _sched_api_get("/schedule/day", date=sel.isoformat())
+        if sched_status != 200:
+            st.error(f"Could not load sessions: {day_data.get('error', 'unknown error')}")
+            sessions = []
+        else:
+            sessions = day_data.get("sessions", [])
+
+        if not sessions:
+            st.info("No re-test slots scheduled for this day yet.")
+        for s in sessions:
+            tag = "🆕 New Athlete" if s["match_status"] == "new" else "✅ Existing Athlete"
+            with st.container(border=True):
+                c1, c2 = st.columns([3, 1])
+                with c1:
+                    st.markdown(f"**{s['scheduled_time'][:5]}** — {s['athlete_name']}")
+                    st.caption(f"{tag} · {s['phone']}")
+                    if s.get("notes"):
+                        st.caption(f"📝 {s['notes']}")
+                with c2:
+                    if st.button("Cancel", key=f"sched_cancel_{s['id']}", use_container_width=True):
+                        result, cstatus = _sched_api_delete(f"/schedule/session/{s['id']}")
+                        if cstatus == 200:
+                            st.success("Slot cancelled.")
+                            st.rerun()
+                        else:
+                            st.error(result.get("error", "Could not cancel."))
+
+    st.markdown("---")
+    st.subheader("Book a Re-Test Slot")
+
+    if st.session_state.match_result is None:
+        with st.form("sched_new_slot_form"):
+            c1, c2 = st.columns(2)
+            with c1:
+                sched_athlete_name = st.text_input("Athlete Name", placeholder="First Last")
+                sched_phone = st.text_input("Phone Number", placeholder="(555) 555-5555")
+            with c2:
+                sched_slot_date = st.date_input("Test Date", value=st.session_state.selected_date)
+                sched_slot_time = st.time_input("Test Time", value=dt.time(9, 0))
+            sched_notes = st.text_area("Notes (optional)", placeholder="e.g. jump testing only")
+
+            sched_submitted = st.form_submit_button("Check Athlete & Continue", type="primary")
+
+        if sched_submitted:
+            if not sched_athlete_name.strip() or not sched_phone.strip():
+                st.error("Athlete name and phone number are required.")
+            else:
+                match, mstatus = _sched_api_post(
+                    "/schedule/check_match",
+                    {"athlete_name": sched_athlete_name.strip(), "phone": sched_phone.strip()},
+                )
+                if mstatus != 200:
+                    st.error(match.get("error", "Could not check athlete match."))
+                else:
+                    st.session_state.match_result = match
+                    st.session_state.pending_slot = {
+                        "athlete_name": sched_athlete_name.strip(),
+                        "phone": sched_phone.strip(),
+                        "scheduled_date": sched_slot_date.isoformat(),
+                        "scheduled_time": sched_slot_time.strftime("%H:%M"),
+                        "notes": sched_notes.strip() or None,
+                    }
+                    st.rerun()
+
+    else:
+        match = st.session_state.match_result
+        slot = st.session_state.pending_slot
+        st.write(
+            f"**{slot['athlete_name']}** · {slot['phone']} · "
+            f"{slot['scheduled_date']} at {slot['scheduled_time']}"
+        )
+
+        # Case 1: no athlete found with this name at all → straightforward new athlete
+        if not match["name_found"]:
+            st.info("No existing athlete matches this name. This will create a new athlete record.")
+            bcol1, bcol2 = st.columns(2)
+            with bcol1:
+                if st.button("Book as New Athlete", type="primary", use_container_width=True, key="sched_book_new"):
+                    result, bstatus = _sched_api_post("/schedule/book", {**slot, "action": "new"})
+                    if bstatus == 200:
+                        st.success(f"Booked {slot['athlete_name']} for {slot['scheduled_date']} at {slot['scheduled_time']}.")
+                        _sched_reset_booking_flow()
+                        st.rerun()
+                    else:
+                        st.error(result.get("error", "Could not book slot."))
+            with bcol2:
+                if st.button("Cancel", use_container_width=True, key="sched_cancel_case1"):
+                    _sched_reset_booking_flow()
+                    st.rerun()
+
+        # Case 2: name found and phone matches → clean existing-athlete booking
+        elif match["phone_match"]:
+            st.success(f"Matches existing athlete: **{match['full_name']}**")
+            bcol1, bcol2 = st.columns(2)
+            with bcol1:
+                if st.button("Book Slot", type="primary", use_container_width=True, key="sched_book_existing"):
+                    result, bstatus = _sched_api_post(
+                        "/schedule/book",
+                        {**slot, "action": "existing", "master_uid": match["master_uid"]},
+                    )
+                    if bstatus == 200:
+                        st.success(f"Booked {slot['athlete_name']} for {slot['scheduled_date']} at {slot['scheduled_time']}.")
+                        _sched_reset_booking_flow()
+                        st.rerun()
+                    else:
+                        st.error(result.get("error", "Could not book slot."))
+            with bcol2:
+                if st.button("Cancel", use_container_width=True, key="sched_cancel_case2"):
+                    _sched_reset_booking_flow()
+                    st.rerun()
+
+        # Case 3: name found but phone does NOT match on file → conflict, needs resolution
+        else:
+            st.warning(
+                f"An athlete named **{match['full_name']}** already exists, but the phone number "
+                f"on file (**{match['stored_phone'] or 'none on file'}**) doesn't match what you "
+                f"entered (**{slot['phone']}**)."
+            )
+            st.write("How would you like to resolve this?")
+
+            rcol1, rcol2 = st.columns(2)
+            with rcol1:
+                st.markdown("**Option A — Different person, same name**")
+                if st.button("Create New Athlete", use_container_width=True, key="sched_create_new"):
+                    result, bstatus = _sched_api_post("/schedule/book", {**slot, "action": "new"})
+                    if bstatus == 200:
+                        st.success(f"Booked {slot['athlete_name']} as a new athlete for {slot['scheduled_date']} at {slot['scheduled_time']}.")
+                        _sched_reset_booking_flow()
+                        st.rerun()
+                    else:
+                        st.error(result.get("error", "Could not book slot."))
+
+            with rcol2:
+                st.markdown(f"**Option B — Update {match['full_name']}'s phone number**")
+                st.caption(
+                    f"⚠️ This overwrites the phone number PWRX uses to match "
+                    f"{match['full_name']}'s data across every system (ArmCare, Dari, InBody, "
+                    f"membership). Only do this if you're sure their number changed."
+                )
+                st.session_state.confirm_phone_edit = st.checkbox(
+                    f"I understand this changes {match['full_name']}'s phone number on file.",
+                    value=st.session_state.confirm_phone_edit,
+                    key="sched_confirm_phone_checkbox",
+                )
+                if st.button(
+                    "Confirm & Update Phone",
+                    use_container_width=True,
+                    disabled=not st.session_state.confirm_phone_edit,
+                    key="sched_confirm_phone_update",
+                ):
+                    result, bstatus = _sched_api_post(
+                        "/schedule/book",
+                        {**slot, "action": "update_phone", "master_uid": match["master_uid"]},
+                    )
+                    if bstatus == 200:
+                        st.success(
+                            f"Updated phone for {match['full_name']} and booked the slot for "
+                            f"{slot['scheduled_date']} at {slot['scheduled_time']}."
+                        )
+                        _sched_reset_booking_flow()
+                        st.rerun()
+                    else:
+                        st.error(result.get("error", "Could not book slot."))
+
+            if st.button("Cancel", key="sched_cancel_case3"):
+                _sched_reset_booking_flow()
+                st.rerun()
