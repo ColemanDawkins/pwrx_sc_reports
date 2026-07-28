@@ -848,7 +848,7 @@ html, body {
           <div style="height:1px;background:rgba(255,255,255,0.07);margin:2px 0;"></div>
           <div style="font-size:9px;color:#5A7A9A;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:1px;">Vertical Jump (Dari)</div>
           <div style="display:flex;align-items:flex-end;gap:4px;">
-            <span style="font-family:'Bebas Neue',sans-serif;font-size:56px;line-height:1;color:#38A3A5;">{{ dari.vj }}</span>
+            <span style="font-family:'Bebas Neue',sans-serif;font-size:56px;line-height:1;color:#38A3A5;">{{ "%.1f"|format(dari.vj * 39.37) if dari.vj is not none else "—" }}</span>
             <span style="font-size:13px;color:#5A7A9A;margin-bottom:10px;">IN</span>
           </div>
         </div>

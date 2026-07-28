@@ -1741,7 +1741,7 @@ def load_athlete_data(athlete_name: str) -> dict:
                 "r_ankle":     round(_safe_float(last_dari.get("ankrt_vulnerability")), 1),
                 "l_ankle":     round(_safe_float(last_dari.get("anklt_vulnerability")), 1),
             },
-            "vj": round(_safe_float(last_dari.get("dp7_jump_height")), 1),
+            "vj": _safe_float(last_dari.get("dp7_jump_height")),
         },
         "vald": {
             "trend":   vald_trend,
