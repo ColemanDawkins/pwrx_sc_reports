@@ -33,7 +33,7 @@ if "athlete_create_step"   not in st.session_state: st.session_state.athlete_cre
 if "dari_id_saved"         not in st.session_state: st.session_state.dari_id_saved         = False
 if "phone_saved"           not in st.session_state: st.session_state.phone_saved           = False
 
-# Session state for the re-test scheduler
+# Session state for the evaluation scheduler
 _today = dt.date.today()
 if "cal_year"            not in st.session_state: st.session_state.cal_year            = _today.year
 if "cal_month"           not in st.session_state: st.session_state.cal_month           = _today.month
@@ -653,8 +653,8 @@ st.caption("PWRX · Strength & Conditioning Data Platform")
 
 # ── TAB 6: Schedule ────────────────────────────────────────────────────────────
 with tab6:
-    st.markdown("### Re-Test Scheduler")
-    st.caption("Book athlete re-test appointments and see who's scheduled each day.")
+    st.markdown("### Evaluation Scheduler")
+    st.caption("Book athlete evaluation appointments and see who's scheduled each day.")
 
     cal_col, day_col = st.columns([3, 2], gap="large")
 
@@ -739,7 +739,7 @@ with tab6:
             sessions = day_data.get("sessions", [])
 
         if not sessions:
-            st.info("No re-test slots scheduled for this day yet.")
+            st.info("No evaluation slots scheduled for this day yet.")
         for s in sessions:
             tag = "🆕 New Athlete" if s["match_status"] == "new" else "✅ Existing Athlete"
             with st.container(border=True):
@@ -759,7 +759,7 @@ with tab6:
                             st.error(result.get("error", "Could not cancel."))
 
     st.markdown("---")
-    st.subheader("Book a Re-Test Slot")
+    st.subheader("Book an Evaluation Slot")
 
     if st.session_state.match_result is None:
         with st.form("sched_new_slot_form"):
@@ -768,8 +768,8 @@ with tab6:
                 sched_athlete_name = st.text_input("Athlete Name", placeholder="First Last")
                 sched_phone = st.text_input("Phone Number", placeholder="(555) 555-5555")
             with c2:
-                sched_slot_date = st.date_input("Test Date", value=st.session_state.selected_date)
-                sched_slot_time = st.time_input("Test Time", value=dt.time(9, 0))
+                sched_slot_date = st.date_input("Evaluation Date", value=st.session_state.selected_date)
+                sched_slot_time = st.time_input("Evaluation Time", value=dt.time(9, 0))
             sched_notes = st.text_area("Notes (optional)", placeholder="e.g. jump testing only")
 
             sched_submitted = st.form_submit_button("Check Athlete & Continue", type="primary")

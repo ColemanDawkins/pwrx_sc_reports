@@ -475,8 +475,8 @@ DO $$ BEGIN
   END IF;
 END $$;
 
--- ── Re-test scheduling ─────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS test_sessions (
+-- ── Evaluation scheduling ─────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS evaluation_sessions (
     id                  SERIAL PRIMARY KEY,
     athlete_name        TEXT NOT NULL,
     phone               TEXT NOT NULL,
@@ -491,12 +491,12 @@ CREATE TABLE IF NOT EXISTS test_sessions (
     UNIQUE (scheduled_date, scheduled_time)
 );
 
-CREATE INDEX IF NOT EXISTS idx_test_sessions_date   ON test_sessions(scheduled_date);
-CREATE INDEX IF NOT EXISTS idx_test_sessions_master ON test_sessions(master_uid);
+CREATE INDEX IF NOT EXISTS idx_evaluation_sessions_date   ON evaluation_sessions(scheduled_date);
+CREATE INDEX IF NOT EXISTS idx_evaluation_sessions_master ON evaluation_sessions(master_uid);
 
 DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'test_sessions_updated_at') THEN
-    CREATE TRIGGER test_sessions_updated_at BEFORE UPDATE ON test_sessions FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'evaluation_sessions_updated_at') THEN
+    CREATE TRIGGER evaluation_sessions_updated_at BEFORE UPDATE ON evaluation_sessions FOR EACH ROW EXECUTE FUNCTION set_updated_at();
   END IF;
 END $$;
 """
@@ -2325,7 +2325,7 @@ def get_unlinked_counts() -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# RE-TEST SCHEDULING
+# EVALUATION SCHEDULING
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _clean_phone(phone: str) -> str:
@@ -2385,10 +2385,10 @@ def check_schedule_match(athlete_name: str, phone: str) -> dict:
     }
 
 
-def book_test_session(athlete_name: str, phone: str, scheduled_date, scheduled_time,
+def book_evaluation_session(athlete_name: str, phone: str, scheduled_date, scheduled_time,
                        action: str, master_uid: str = None, notes: str = None) -> dict:
     """
-    Book a re-test slot. `action` determines how the athlete match is resolved:
+    Book an evaluation slot. `action` determines how the athlete match is resolved:
         "existing"     -> link to the given master_uid as-is (phone already matched)
         "new"          -> create a brand-new athlete record (force=True, since the
                            name may already exist under a different phone)
@@ -2427,7 +2427,7 @@ def book_test_session(athlete_name: str, phone: str, scheduled_date, scheduled_t
     cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     try:
         cur.execute("""
-            INSERT INTO test_sessions
+            INSERT INTO evaluation_sessions
                 (athlete_name, phone, master_uid, scheduled_date, scheduled_time,
                  match_status, notes)
             VALUES (%s, %s, %s, %s, %s, %s, %s)
@@ -2451,12 +2451,12 @@ def get_schedule_day(scheduled_date) -> list[dict]:
     conn = get_conn()
     cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("""
-        SELECT ts.id, ts.athlete_name, ts.phone, ts.master_uid,
-               ts.scheduled_date, ts.scheduled_time, ts.match_status, ts.notes,
-               ts.reminder_sent_at
-        FROM test_sessions ts
-        WHERE ts.scheduled_date = %s
-        ORDER BY ts.scheduled_time
+        SELECT es.id, es.athlete_name, es.phone, es.master_uid,
+               es.scheduled_date, es.scheduled_time, es.match_status, es.notes,
+               es.reminder_sent_at
+        FROM evaluation_sessions es
+        WHERE es.scheduled_date = %s
+        ORDER BY es.scheduled_time
     """, (scheduled_date,))
     rows = [dict(r) for r in cur.fetchall()]
     cur.close()
@@ -2470,7 +2470,7 @@ def get_schedule_month(year: int, month: int) -> dict:
     cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("""
         SELECT scheduled_date, match_status, COUNT(*) AS n
-        FROM test_sessions
+        FROM evaluation_sessions
         WHERE EXTRACT(YEAR FROM scheduled_date) = %s
           AND EXTRACT(MONTH FROM scheduled_date) = %s
         GROUP BY scheduled_date, match_status
@@ -2488,11 +2488,11 @@ def get_schedule_month(year: int, month: int) -> dict:
     return result
 
 
-def cancel_test_session(session_id: int) -> bool:
+def cancel_evaluation_session(session_id: int) -> bool:
     """Delete a booked slot. Does not affect the linked athlete record."""
     conn = get_conn()
     cur  = conn.cursor()
-    cur.execute("DELETE FROM test_sessions WHERE id = %s", (session_id,))
+    cur.execute("DELETE FROM evaluation_sessions WHERE id = %s", (session_id,))
     deleted = cur.rowcount > 0
     conn.commit()
     cur.close()

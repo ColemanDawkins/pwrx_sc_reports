@@ -493,7 +493,7 @@ async def ingest_vald_slj(file: UploadFile = File(...)):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# RE-TEST SCHEDULING
+# EVALUATION SCHEDULING
 # ─────────────────────────────────────────────────────────────────────────────
 
 class CheckMatchRequest(BaseModel):
@@ -525,10 +525,10 @@ def schedule_check_match(req: CheckMatchRequest):
 
 @app.post("/schedule/book")
 def schedule_book(req: BookSlotRequest):
-    """Book a re-test slot. See sc_db.book_test_session for the action semantics."""
+    """Book an evaluation slot. See sc_db.book_evaluation_session for the action semantics."""
     try:
-        from sc_db import book_test_session
-        result = book_test_session(
+        from sc_db import book_evaluation_session
+        result = book_evaluation_session(
             athlete_name=req.athlete_name,
             phone=req.phone,
             scheduled_date=req.scheduled_date,
@@ -581,8 +581,8 @@ def schedule_month(year: int = Query(...), month: int = Query(...)):
 def schedule_cancel(session_id: int):
     """Cancel a booked slot."""
     try:
-        from sc_db import cancel_test_session
-        deleted = cancel_test_session(session_id)
+        from sc_db import cancel_evaluation_session
+        deleted = cancel_evaluation_session(session_id)
         if not deleted:
             return JSONResponse({"error": "Session not found"}, status_code=404)
         return {"status": "ok", "cancelled": session_id}
