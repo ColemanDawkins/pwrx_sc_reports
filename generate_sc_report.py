@@ -496,9 +496,88 @@ def chart_segments(data):
     return _fig_to_html(fig, 210)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# HELPERS — gauge SVG, chip badge
-# ─────────────────────────────────────────────────────────────────────────────
+def chart_spider(data):
+    """
+    Overlaid radar chart: most recent session (WRX orange, on top) vs.
+    previous session (muted grey, behind), across one representative
+    metric from each data source. All axes normalized to a 0-100 scale:
+      - Dari scores are already 0-100
+      - Dari Vulnerability/Dysfunction are inverted (100 - score) since
+        lower is better for these two
+      - Vald Peak Power / Jump Height / ArmCare Score are expressed as a
+        percentage of a fixed reference max (8000W, 28in, 120 respectively)
+    """
+    WRX_ORANGE = "#f4750d"
+    PREV_GREY  = "#5A7A9A"
+
+    dari_cur  = data["dari"]["current"]
+    dari_trend = data["dari"]["trend"]
+    dari_prev = dari_trend[-2] if len(dari_trend) >= 2 else dari_cur
+
+    vald_cur  = data["vald"]["current"]
+    vald_prev = data["vald"].get("prev", vald_cur)
+
+    arm_cur   = data["arm"]["current"]
+    arm_prev  = data["arm"].get("prev", arm_cur)
+
+    inbody_trend = (data.get("inbody") or {}).get("trend") or []
+    inbody_cur_score  = (data.get("inbody") or {}).get("score", 0)
+    inbody_prev_score = inbody_trend[-2]["score"] if len(inbody_trend) >= 2 else inbody_cur_score
+
+    labels = ["Dari Overall", "Dari Vulnerability", "Dari Functionality",
+              "Dari Explosiveness", "Dari Dysfunction",
+              "Peak Power", "Jump Height", "Arm Score", "InBody Score"]
+
+    def series(dari, vald, arm, inbody_score):
+        return [
+            dari.get("overall", 0),
+            100 - dari.get("athleticism", 0),
+            dari.get("functionality", 0),
+            dari.get("explosiveness", 0),
+            100 - dari.get("dysfunction", 0),
+            vald.get("peak_power", 0) / 8000 * 100,
+            vald.get("jump_height", 0) / 28 * 100,
+            arm.get("arm_score", 0) / 120 * 100,
+            inbody_score,
+        ]
+
+    current  = series(dari_cur, vald_cur, arm_cur, inbody_cur_score)
+    previous = series(dari_prev, vald_prev, arm_prev, inbody_prev_score)
+
+    n = len(labels)
+    angles = [i / n * 2 * math.pi for i in range(n)]
+    angles += angles[:1]
+    cur_pts  = current + current[:1]
+    prev_pts = previous + previous[:1]
+
+    fig, ax = plt.subplots(figsize=(5.6, 5.6), subplot_kw=dict(polar=True))
+    fig.patch.set_alpha(0)
+    ax.set_facecolor("none")
+    ax.set_theta_offset(math.pi / 2)
+    ax.set_theta_direction(-1)
+    ax.set_xticks(angles[:-1])
+    ax.set_xticklabels(labels, fontsize=8.5, color=C["grey"])
+
+    max_val = max(max(current), max(previous), 100)
+    r_max = 10 * (int(max_val / 10) + 1)
+    ax.set_ylim(0, r_max)
+    ax.set_yticks([r_max * i / 4 for i in range(5)])
+    ax.set_yticklabels([])
+    ax.grid(color="#1a2d45", linewidth=0.6, alpha=0.7)
+    ax.spines["polar"].set_color("#1a2d45")
+
+    ax.plot(angles, prev_pts, color=PREV_GREY, linewidth=1.5, linestyle="--",
+            marker="o", markersize=3.5, label="Previous Session", zorder=2)
+    ax.fill(angles, prev_pts, color=PREV_GREY, alpha=0.12, zorder=1)
+
+    ax.plot(angles, cur_pts, color=WRX_ORANGE, linewidth=2.4,
+            marker="o", markersize=5, label="Current Session", zorder=4)
+    ax.fill(angles, cur_pts, color=WRX_ORANGE, alpha=0.25, zorder=3)
+
+    ax.legend(loc="upper right", bbox_to_anchor=(1.32, 1.12), fontsize=7.5,
+              framealpha=0, labelcolor=C["grey"])
+    fig.tight_layout(pad=0.6)
+    return _fig_to_html(fig, 420)
 
 def gauge_svg(value, max_val, label, color):
     R = 26; cx = 34; cy = 34
@@ -1267,6 +1346,10 @@ html,body{background:var(--bg);color:#E8F0F8;font-family:'Barlow Condensed',sans
 .flag-ok{padding:10px 14px;font-size:12px;color:#22c55e;}
 .flag-item{padding:6px 14px;font-size:11px;color:#EF4444;}
 .flag-item.improve{color:#22c55e;}
+.p3-panel{margin:8px;background:var(--panel);border-radius:10px;border:1px solid var(--border);overflow:hidden;}
+.p3-hdr{padding:0 14px;height:42px;display:flex;align-items:center;gap:8px;border-bottom:2px solid #f4750d;
+  font-family:'Bebas Neue',sans-serif;font-size:15px;letter-spacing:2px;color:#fff;}
+.p3-body{padding:14px;display:flex;justify-content:center;}
 @media (max-width:768px){
   .p1-grid{grid-template-columns:1fr;grid-template-rows:auto;height:auto;min-height:unset;}
   .p2-grid{grid-template-columns:1fr !important;}
@@ -1468,6 +1551,11 @@ html,body{background:var(--bg);color:#E8F0F8;font-family:'Barlow Condensed',sans
 </div>
 {% endif %}
 
+<div class="p3-panel">
+  <div class="p3-hdr">Performance Overview — Current vs. Previous Session</div>
+  <div class="p3-body">{{ chart_spider }}</div>
+</div>
+
 </body>
 </html>
 """
@@ -1551,6 +1639,7 @@ def render_report(data: dict, out_path: str):
         chart_arm_balance      = chart_arm_balance(data),
         chart_inbody_donut     = chart_inbody_donut(data),
         chart_segments         = chart_segments(data),
+        chart_spider           = chart_spider(data),
     )
 
     os.makedirs(os.path.dirname(out_path) if os.path.dirname(out_path) else ".", exist_ok=True)
