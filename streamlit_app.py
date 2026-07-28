@@ -743,20 +743,20 @@ with tab6:
         for s in sessions:
             tag = "🆕 New Athlete" if s["match_status"] == "new" else "✅ Existing Athlete"
             with st.container(border=True):
-                c1, c2 = st.columns([3, 1])
+                c1, c2 = st.columns([5, 1])
                 with c1:
                     st.markdown(f"**{s['scheduled_time'][:5]}** — {s['athlete_name']}")
                     st.caption(f"{tag} · {s['phone']}")
                     if s.get("notes"):
                         st.caption(f"📝 {s['notes']}")
                 with c2:
-                    if st.button("Cancel", key=f"sched_cancel_{s['id']}", use_container_width=True):
+                    if st.button("🗑️", key=f"sched_cancel_{s['id']}", use_container_width=True, help="Cancel this slot"):
                         result, cstatus = _sched_api_delete(f"/schedule/session/{s['id']}")
                         if cstatus == 200:
-                            st.success("Slot cancelled.")
+                            st.toast("Slot cancelled.", icon="✅")
                             st.rerun()
                         else:
-                            st.error(result.get("error", "Could not cancel."))
+                            st.toast(result.get("error", "Could not cancel."), icon="⚠️")
 
     st.markdown("---")
     st.subheader("Book an Evaluation Slot")
