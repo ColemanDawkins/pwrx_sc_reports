@@ -493,6 +493,105 @@ async def ingest_vald_slj(file: UploadFile = File(...)):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# RE-TEST SCHEDULING
+# ─────────────────────────────────────────────────────────────────────────────
+
+class CheckMatchRequest(BaseModel):
+    athlete_name: str
+    phone:        str
+
+
+class BookSlotRequest(BaseModel):
+    athlete_name:   str
+    phone:          str
+    scheduled_date: str   # YYYY-MM-DD
+    scheduled_time: str   # HH:MM
+    action:         str   # "existing" | "new" | "update_phone"
+    master_uid:     Optional[str] = None
+    notes:          Optional[str] = None
+
+
+@app.post("/schedule/check_match")
+def schedule_check_match(req: CheckMatchRequest):
+    """Check whether the entered name+phone matches an existing athlete."""
+    try:
+        from sc_db import check_schedule_match
+        result = check_schedule_match(req.athlete_name, req.phone)
+        return result
+    except Exception as exc:
+        traceback.print_exc()
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+@app.post("/schedule/book")
+def schedule_book(req: BookSlotRequest):
+    """Book a re-test slot. See sc_db.book_test_session for the action semantics."""
+    try:
+        from sc_db import book_test_session
+        result = book_test_session(
+            athlete_name=req.athlete_name,
+            phone=req.phone,
+            scheduled_date=req.scheduled_date,
+            scheduled_time=req.scheduled_time,
+            action=req.action,
+            master_uid=req.master_uid,
+            notes=req.notes,
+        )
+        if result.get("status") == "slot_taken":
+            return JSONResponse(
+                {"error": "That date and time is already booked."}, status_code=409
+            )
+        return result
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    except Exception as exc:
+        traceback.print_exc()
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+@app.get("/schedule/day")
+def schedule_day(date: str = Query(..., description="YYYY-MM-DD")):
+    """List all booked sessions for one date."""
+    try:
+        from sc_db import get_schedule_day
+        rows = get_schedule_day(date)
+        for r in rows:
+            r["scheduled_date"] = str(r["scheduled_date"])
+            r["scheduled_time"] = str(r["scheduled_time"])
+            if r.get("reminder_sent_at"):
+                r["reminder_sent_at"] = str(r["reminder_sent_at"])
+        return {"sessions": rows}
+    except Exception as exc:
+        traceback.print_exc()
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+@app.get("/schedule/month")
+def schedule_month(year: int = Query(...), month: int = Query(...)):
+    """Per-day booking counts (total/new/existing) for calendar badges."""
+    try:
+        from sc_db import get_schedule_month
+        return {"days": get_schedule_month(year, month)}
+    except Exception as exc:
+        traceback.print_exc()
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+@app.delete("/schedule/session/{session_id}")
+def schedule_cancel(session_id: int):
+    """Cancel a booked slot."""
+    try:
+        from sc_db import cancel_test_session
+        deleted = cancel_test_session(session_id)
+        if not deleted:
+            return JSONResponse({"error": "Session not found"}, status_code=404)
+        return {"status": "ok", "cancelled": session_id}
+    except Exception as exc:
+        traceback.print_exc()
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import uvicorn

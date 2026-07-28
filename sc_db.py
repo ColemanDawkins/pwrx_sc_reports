@@ -21,6 +21,7 @@ Usage:
 """
 
 import os
+import re
 import sys
 import argparse
 import datetime
@@ -471,6 +472,31 @@ DO $$ BEGIN
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'pushpress_updated_at') THEN
     CREATE TRIGGER pushpress_updated_at BEFORE UPDATE ON pushpress FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+  END IF;
+END $$;
+
+-- ── Re-test scheduling ─────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS test_sessions (
+    id                  SERIAL PRIMARY KEY,
+    athlete_name        TEXT NOT NULL,
+    phone               TEXT NOT NULL,
+    master_uid          TEXT REFERENCES master_uid(master_uid) ON DELETE SET NULL,
+    scheduled_date      DATE NOT NULL,
+    scheduled_time      TIME NOT NULL,
+    match_status        TEXT NOT NULL DEFAULT 'new',   -- 'existing' | 'new'
+    notes               TEXT,
+    reminder_sent_at    TIMESTAMPTZ,
+    created_at          TIMESTAMPTZ DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (scheduled_date, scheduled_time)
+);
+
+CREATE INDEX IF NOT EXISTS idx_test_sessions_date   ON test_sessions(scheduled_date);
+CREATE INDEX IF NOT EXISTS idx_test_sessions_master ON test_sessions(master_uid);
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'test_sessions_updated_at') THEN
+    CREATE TRIGGER test_sessions_updated_at BEFORE UPDATE ON test_sessions FOR EACH ROW EXECUTE FUNCTION set_updated_at();
   END IF;
 END $$;
 """
@@ -2121,9 +2147,15 @@ def ingest_vald_slj(path: str) -> dict:
 
 def create_athlete(first_name: str, last_name: str,
                    dari_id: str = None, armcare_id: str = None,
-                   vald_id: str = None, pushpress_id: str = None) -> dict:
+                   vald_id: str = None, pushpress_id: str = None,
+                   force: bool = False) -> dict:
     """
     Create a new athlete in master_uid with an auto-generated PWRX ID.
+
+    Args:
+        force: if True, skip the duplicate-name check and create anyway.
+               Used when two distinct athletes legitimately share a name
+               (e.g. the scheduler's "create new athlete" resolution path).
 
     Returns:
         {"status": "created", "master_uid": "PWRX000516", "full_name": "..."}
@@ -2135,18 +2167,19 @@ def create_athlete(first_name: str, last_name: str,
 
     try:
         # Duplicate check
-        cur.execute("""
-            SELECT master_uid, full_name FROM master_uid
-            WHERE LOWER(TRIM(full_name)) = LOWER(TRIM(%s))
-            LIMIT 1
-        """, (full_name,))
-        existing = cur.fetchone()
-        if existing:
-            return {
-                "status":        "duplicate",
-                "existing_uid":  existing[0],
-                "existing_name": existing[1],
-            }
+        if not force:
+            cur.execute("""
+                SELECT master_uid, full_name FROM master_uid
+                WHERE LOWER(TRIM(full_name)) = LOWER(TRIM(%s))
+                LIMIT 1
+            """, (full_name,))
+            existing = cur.fetchone()
+            if existing:
+                return {
+                    "status":        "duplicate",
+                    "existing_uid":  existing[0],
+                    "existing_name": existing[1],
+                }
 
         # Generate ID and insert
         pwrx_id = generate_pwrx_id(cur)
@@ -2289,6 +2322,182 @@ def get_unlinked_counts() -> dict:
     cur.close()
     conn.close()
     return counts
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RE-TEST SCHEDULING
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _clean_phone(phone: str) -> str:
+    return re.sub(r"[^0-9]", "", phone or "")
+
+
+def check_schedule_match(athlete_name: str, phone: str) -> dict:
+    """
+    Look up an athlete by exact name and compare the phone on file (checked
+    against both pushpress.phone and master_uid.inbody_uid) to the entered
+    phone number.
+
+    Returns:
+        {
+          "name_found":  bool,   # an athlete with this name exists
+          "phone_match": bool,   # entered phone matches phone on file
+          "master_uid":  str | None,
+          "full_name":   str | None,
+          "stored_phone": str | None,
+        }
+    """
+    clean_phone = _clean_phone(phone)
+    conn = get_conn()
+    cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("""
+        SELECT m.master_uid, m.full_name, m.inbody_uid AS inbody_phone,
+               MAX(p.phone) AS pushpress_phone
+        FROM master_uid m
+        LEFT JOIN pushpress p ON p.master_uid = m.master_uid
+        WHERE LOWER(TRIM(m.full_name)) = LOWER(TRIM(%s))
+        GROUP BY m.master_uid, m.full_name, m.inbody_uid
+        LIMIT 1
+    """, (athlete_name,))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+
+    if not row:
+        return {"name_found": False, "phone_match": False, "master_uid": None,
+                "full_name": None, "stored_phone": None}
+
+    stored_phones = set()
+    if row["inbody_phone"]:
+        stored_phones.add(_clean_phone(row["inbody_phone"]))
+    if row["pushpress_phone"]:
+        stored_phones.add(_clean_phone(row["pushpress_phone"]))
+    stored_phones.discard("")
+
+    phone_match = bool(clean_phone) and clean_phone in stored_phones
+
+    return {
+        "name_found":   True,
+        "phone_match":  phone_match,
+        "master_uid":   row["master_uid"],
+        "full_name":    row["full_name"],
+        "stored_phone": next(iter(stored_phones), None),
+    }
+
+
+def book_test_session(athlete_name: str, phone: str, scheduled_date, scheduled_time,
+                       action: str, master_uid: str = None, notes: str = None) -> dict:
+    """
+    Book a re-test slot. `action` determines how the athlete match is resolved:
+        "existing"     -> link to the given master_uid as-is (phone already matched)
+        "new"          -> create a brand-new athlete record (force=True, since the
+                           name may already exist under a different phone)
+        "update_phone" -> overwrite the phone on file for the given master_uid,
+                           then link the slot to that athlete
+
+    Returns the created session dict, or {"status": "slot_taken"} if the
+    date/time is already booked.
+    """
+    clean_phone = _clean_phone(phone)
+
+    if action == "new":
+        parts = athlete_name.strip().split(" ", 1)
+        first_name = parts[0]
+        last_name  = parts[1] if len(parts) > 1 else ""
+        result = create_athlete(first_name, last_name, force=True)
+        master_uid = result["master_uid"]
+        set_inbody_uid(master_uid, clean_phone)
+        match_status = "new"
+
+    elif action == "update_phone":
+        if not master_uid:
+            raise ValueError("master_uid is required for action='update_phone'")
+        update_athlete_ids(master_uid=master_uid, phone=clean_phone)
+        match_status = "existing"
+
+    elif action == "existing":
+        if not master_uid:
+            raise ValueError("master_uid is required for action='existing'")
+        match_status = "existing"
+
+    else:
+        raise ValueError(f"Unknown action: {action}")
+
+    conn = get_conn()
+    cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cur.execute("""
+            INSERT INTO test_sessions
+                (athlete_name, phone, master_uid, scheduled_date, scheduled_time,
+                 match_status, notes)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            RETURNING id, athlete_name, phone, master_uid, scheduled_date,
+                      scheduled_time, match_status, notes, created_at
+        """, (athlete_name.strip(), clean_phone, master_uid, scheduled_date,
+              scheduled_time, match_status, notes or None))
+        row = dict(cur.fetchone())
+        conn.commit()
+        return row
+    except psycopg2.errors.UniqueViolation:
+        conn.rollback()
+        return {"status": "slot_taken"}
+    finally:
+        cur.close()
+        conn.close()
+
+
+def get_schedule_day(scheduled_date) -> list[dict]:
+    """Return all booked sessions for one date, ordered by time."""
+    conn = get_conn()
+    cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("""
+        SELECT ts.id, ts.athlete_name, ts.phone, ts.master_uid,
+               ts.scheduled_date, ts.scheduled_time, ts.match_status, ts.notes,
+               ts.reminder_sent_at
+        FROM test_sessions ts
+        WHERE ts.scheduled_date = %s
+        ORDER BY ts.scheduled_time
+    """, (scheduled_date,))
+    rows = [dict(r) for r in cur.fetchall()]
+    cur.close()
+    conn.close()
+    return rows
+
+
+def get_schedule_month(year: int, month: int) -> dict:
+    """Return {day_number: {"total": n, "new": n, "existing": n}} for the given month."""
+    conn = get_conn()
+    cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("""
+        SELECT scheduled_date, match_status, COUNT(*) AS n
+        FROM test_sessions
+        WHERE EXTRACT(YEAR FROM scheduled_date) = %s
+          AND EXTRACT(MONTH FROM scheduled_date) = %s
+        GROUP BY scheduled_date, match_status
+    """, (year, month))
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    result = {}
+    for r in rows:
+        day = r["scheduled_date"].day
+        entry = result.setdefault(day, {"total": 0, "new": 0, "existing": 0})
+        entry["total"] += r["n"]
+        entry[r["match_status"]] = entry.get(r["match_status"], 0) + r["n"]
+    return result
+
+
+def cancel_test_session(session_id: int) -> bool:
+    """Delete a booked slot. Does not affect the linked athlete record."""
+    conn = get_conn()
+    cur  = conn.cursor()
+    cur.execute("DELETE FROM test_sessions WHERE id = %s", (session_id,))
+    deleted = cur.rowcount > 0
+    conn.commit()
+    cur.close()
+    conn.close()
+    return deleted
 
 
 # ─────────────────────────────────────────────────────────────────────────────
