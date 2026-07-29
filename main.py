@@ -492,6 +492,34 @@ async def ingest_vald_slj(file: UploadFile = File(...)):
             os.unlink(tmp_path)
 
 
+@app.post("/ingest_sprints")
+async def ingest_sprints(file: UploadFile = File(...)):
+    """Ingest a 20m split-gate sprint timing CSV/XLSX into the sprints table."""
+    tmp_path = None
+    try:
+        contents = await file.read()
+        suffix = ".xlsx" if file.filename.endswith((".xlsx", ".xls")) else ".csv"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(contents)
+            tmp_path = tmp.name
+
+        from sc_db import ingest_sprints as _ingest
+        result = _ingest(tmp_path)
+
+        return {
+            "status":    "success",
+            "inserted":  result["inserted"],
+            "skipped":   result["skipped"],
+            "unmatched": result["unmatched"],
+        }
+    except Exception as exc:
+        traceback.print_exc()
+        return JSONResponse({"error": str(exc)}, status_code=500)
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # EVALUATION SCHEDULING
 # ─────────────────────────────────────────────────────────────────────────────

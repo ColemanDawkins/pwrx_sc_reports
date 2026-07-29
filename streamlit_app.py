@@ -307,7 +307,41 @@ with tab3:
                     st.error("Connection error: " + str(exc))
 
     st.divider()
-    st.markdown("#### Upload VALD Single Leg Jump CSV")
+    st.markdown("#### Upload Sprint Timing CSV")
+    st.caption(
+        "Upload a 20m split-gate sprint timing export (split gate at 10m). "
+        "Each sprint attempt is 2 rows (one per split) — the split ratio "
+        "(0-10m time ÷ 10-20m time) is calculated automatically. "
+        "Athletes are matched by name; duplicate rows are skipped automatically."
+    )
+
+    sprint_file = st.file_uploader(
+        "Select sprint timing CSV or XLSX", type=["csv", "xlsx", "xls"], key="sprints_upload"
+    )
+    if sprint_file:
+        st.success(f"File loaded: {sprint_file.name}")
+        if st.button("Ingest Sprint Data", type="primary"):
+            with st.spinner("Ingesting... please wait"):
+                try:
+                    suffix = ".xlsx" if sprint_file.name.endswith((".xlsx", ".xls")) else ".csv"
+                    mime   = ("application/vnd.openxmlformats-officedocument"
+                              ".spreadsheetml.sheet" if suffix == ".xlsx" else "text/csv")
+                    resp = requests.post(
+                        API_URL + "/ingest_sprints",
+                        files={"file": (sprint_file.name, sprint_file.getvalue(), mime)},
+                        timeout=120
+                    )
+                    if resp.status_code == 200:
+                        r = resp.json()
+                        st.success(f"Done! {r['inserted']} rows inserted, {r['skipped']} skipped.")
+                        if r.get("unmatched"):
+                            with st.expander(f"{len(r['unmatched'])} athletes not matched to roster"):
+                                for name in sorted(r["unmatched"]):
+                                    st.write(f"• {name}")
+                    else:
+                        st.error("Error: " + resp.text)
+                except Exception as exc:
+                    st.error("Connection error: " + str(exc))
     st.caption("Upload the Single Leg Jump CSV exported from VALD Force Decks. "
                "Athletes are matched by name. Duplicate (athlete + date + time) rows are skipped automatically.")
 

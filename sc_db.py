@@ -315,6 +315,34 @@ DO $$ BEGIN
   END IF;
 END $$;
 
+CREATE TABLE IF NOT EXISTS sprints (
+    id                SERIAL PRIMARY KEY,
+    master_uid        TEXT REFERENCES master_uid(master_uid) ON DELETE SET NULL,
+    athlete_name      TEXT,
+    exam_date         DATE,
+    exercise          TEXT,             -- e.g. '20yd Sprint'
+    sprint_num        INTEGER,          -- raw device split counter (increments every row: 1,2,3,4...)
+    sprint_attempt    INTEGER,          -- derived attempt number: ceil(sprint_num / 2)
+    total_time_s      NUMERIC,
+    in_beam_start     BOOLEAN,
+    trigger_start     BOOLEAN,
+    split_num         INTEGER,          -- 1 = start->10m gate, 2 = 10m gate->20m gate
+    split_time_s      NUMERIC,
+    distance_yd       NUMERIC,
+    speed_mph         NUMERIC,
+    split_ratio       NUMERIC,          -- split_1 time / split_2 time, same value on both rows of an attempt
+    uploaded_at       TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_sprints_master ON sprints(master_uid);
+CREATE INDEX IF NOT EXISTS idx_sprints_date   ON sprints(exam_date);
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'sprints_unique_row') THEN
+    ALTER TABLE sprints ADD CONSTRAINT sprints_unique_row UNIQUE (master_uid, exam_date, exercise, sprint_num);
+  END IF;
+END $$;
+
 CREATE TABLE IF NOT EXISTS inbody (
     id                          SERIAL PRIMARY KEY,
     master_uid                  TEXT REFERENCES master_uid(master_uid) ON DELETE SET NULL,
@@ -2129,6 +2157,160 @@ def ingest_vald_slj(path: str) -> dict:
 
         except Exception as e:
             print(f"  Row skipped ({name} / {row['exam_date']}): {e}")
+            conn.rollback()
+            skipped += 1
+            continue
+
+        conn.commit()
+
+    cur.close()
+    conn.close()
+
+    return {
+        "inserted":  inserted,
+        "skipped":   skipped,
+        "unmatched": list(set(unmatched)),
+    }
+
+
+def ingest_sprints(path: str) -> dict:
+    """
+    Ingest a sprint timing CSV (20m sprint with a split gate at 10m).
+
+    Expected columns:
+        Athlete, Date, Exercise, Sprint #, Total Time (s), In-Beam Start,
+        Trigger Start, Split #, Split Time (s), Distance (yd), Speed (mph)
+
+    Each physical sprint attempt comes in as 2 rows (one per split). The
+    device's "Sprint #" column is a raw split counter that increments every
+    row (1,2 for attempt 1; 3,4 for attempt 2; ...) — NOT a true attempt
+    number. The true attempt number is derived as ceil(sprint_num / 2) and
+    stored separately as `sprint_attempt`.
+
+    For each attempt, computes split_ratio = split_1 time / split_2 time
+    (time from start->10m gate, over time from 10m gate->20m gate) and
+    stores that same ratio on both rows of the attempt.
+
+    - Matches athletes by full name against master_uid
+    - Skips duplicate (master_uid, exam_date, exercise, sprint_num) rows
+    - Returns inserted / skipped / unmatched counts
+    """
+    import pandas as pd
+
+    if path.endswith((".xlsx", ".xls")):
+        df = pd.read_excel(path, dtype=str)
+    else:
+        df = pd.read_csv(path, dtype=str)
+    df.columns = [c.strip() for c in df.columns]
+
+    col_map = {
+        "Athlete":          "athlete_name",
+        "Date":             "exam_date",
+        "Exercise":         "exercise",
+        "Sprint #":         "sprint_num",
+        "Total Time (s)":   "total_time_s",
+        "In-Beam Start":    "in_beam_start",
+        "Trigger Start":    "trigger_start",
+        "Split #":          "split_num",
+        "Split Time (s)":   "split_time_s",
+        "Distance (yd)":    "distance_yd",
+        "Speed (mph)":      "speed_mph",
+    }
+    df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
+    df = df.dropna(subset=["athlete_name", "exam_date", "sprint_num", "split_num"])
+
+    df["athlete_name"] = df["athlete_name"].str.strip()
+    df["exam_date"]     = pd.to_datetime(df["exam_date"], errors="coerce").dt.date
+    df = df.dropna(subset=["exam_date"])
+
+    df["sprint_num"] = pd.to_numeric(df["sprint_num"], errors="coerce")
+    df["split_num"]  = pd.to_numeric(df["split_num"], errors="coerce")
+    df = df.dropna(subset=["sprint_num", "split_num"])
+    df["sprint_num"] = df["sprint_num"].astype(int)
+    df["split_num"]  = df["split_num"].astype(int)
+
+    # True attempt number: sprint_num increments every row (1,2 / 3,4 / ...)
+    df["sprint_attempt"] = ((df["sprint_num"] + 1) // 2).astype(int)
+
+    def yn_to_bool(v):
+        if v is None or str(v).strip() == "" or str(v).strip().lower() == "nan":
+            return None
+        return str(v).strip().lower() in ("yes", "y", "true", "1")
+
+    df["in_beam_start"] = df["in_beam_start"].apply(yn_to_bool) if "in_beam_start" in df.columns else None
+    df["trigger_start"] = df["trigger_start"].apply(yn_to_bool) if "trigger_start" in df.columns else None
+
+    for col in ("total_time_s", "split_time_s", "distance_yd", "speed_mph"):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    # Compute split_ratio (split_1 / split_2) per attempt, applied to both rows
+    ratio_lookup = {}
+    group_cols = ["athlete_name", "exam_date", "exercise", "sprint_attempt"]
+    for key, group in df.groupby(group_cols):
+        s1 = group.loc[group["split_num"] == 1, "split_time_s"]
+        s2 = group.loc[group["split_num"] == 2, "split_time_s"]
+        if len(s1) == 1 and len(s2) == 1 and s2.iloc[0]:
+            ratio_lookup[key] = round(float(s1.iloc[0]) / float(s2.iloc[0]), 4)
+        else:
+            ratio_lookup[key] = None
+
+    conn = get_conn()
+    cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    cur.execute("SELECT master_uid, full_name FROM master_uid")
+    name_map = {r["full_name"].strip().lower(): r["master_uid"] for r in cur.fetchall()}
+
+    inserted  = 0
+    skipped   = 0
+    unmatched = []
+
+    db_cols = [
+        "master_uid", "athlete_name", "exam_date", "exercise", "sprint_num",
+        "sprint_attempt", "total_time_s", "in_beam_start", "trigger_start",
+        "split_num", "split_time_s", "distance_yd", "speed_mph", "split_ratio",
+    ]
+
+    for _, row in df.iterrows():
+        name = row["athlete_name"].strip()
+        uid  = name_map.get(name.lower())
+
+        if not uid:
+            unmatched.append(name)
+            skipped += 1
+            continue
+
+        key = (row["athlete_name"], row["exam_date"], row.get("exercise"), row["sprint_attempt"])
+        split_ratio = ratio_lookup.get(key)
+
+        def val(col):
+            v = row.get(col, None)
+            if v is None or (isinstance(v, float) and pd.isna(v)) or str(v).strip() in ("", "nan", "None"):
+                return None
+            return v
+
+        values = [
+            uid, name, row["exam_date"], val("exercise"),
+            int(row["sprint_num"]), int(row["sprint_attempt"]),
+            val("total_time_s"), val("in_beam_start"), val("trigger_start"),
+            int(row["split_num"]), val("split_time_s"), val("distance_yd"),
+            val("speed_mph"), split_ratio,
+        ]
+
+        try:
+            cur.execute(f"""
+                INSERT INTO sprints ({', '.join(db_cols)})
+                VALUES ({', '.join(['%s'] * len(db_cols))})
+                ON CONFLICT (master_uid, exam_date, exercise, sprint_num) DO NOTHING
+            """, values)
+
+            if cur.rowcount == 0:
+                skipped += 1
+            else:
+                inserted += 1
+
+        except Exception as e:
+            print(f"  Row skipped ({name} / {row['exam_date']} / sprint {row['sprint_num']}): {e}")
             conn.rollback()
             skipped += 1
             continue
