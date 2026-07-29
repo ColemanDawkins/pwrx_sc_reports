@@ -898,3 +898,34 @@ with tab6:
             if st.button("Cancel", key="sched_cancel_case3"):
                 _sched_reset_booking_flow()
                 st.rerun()
+
+    st.markdown("---")
+    st.subheader("Daily Schedule Email")
+    st.caption(
+        "This normally sends automatically at 12:00 AM with that day's evaluations. "
+        "Use this to send a test copy manually and confirm everything looks right."
+    )
+
+    ecol1, ecol2 = st.columns([1, 2])
+    with ecol1:
+        test_email_date = st.date_input(
+            "Date to send", value=st.session_state.selected_date, key="sched_test_email_date"
+        )
+    with ecol2:
+        test_email_to = st.text_input(
+            "Send to (comma-separated, leave blank to use the default coach list)",
+            key="sched_test_email_to",
+        )
+
+    if st.button("Send Test Email", key="sched_send_test_email"):
+        payload = {"date": test_email_date.isoformat()}
+        if test_email_to.strip():
+            payload["recipients"] = [r.strip() for r in test_email_to.split(",") if r.strip()]
+        result, estatus = _sched_api_post("/schedule/send_daily_email", payload)
+        if estatus == 200:
+            st.success(
+                f"Sent to {', '.join(result['recipients'])} — "
+                f"{result['session_count']} evaluation(s) for {result['date']}."
+            )
+        else:
+            st.error(result.get("error", "Could not send test email."))

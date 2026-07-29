@@ -24,7 +24,7 @@ from fastapi import FastAPI, UploadFile, File, Form, Query
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 
 app = FastAPI(title="PWRX S&C Reports API", version="1.0.0")
 
@@ -586,6 +586,28 @@ def schedule_cancel(session_id: int):
         if not deleted:
             return JSONResponse({"error": "Session not found"}, status_code=404)
         return {"status": "ok", "cancelled": session_id}
+    except Exception as exc:
+        traceback.print_exc()
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+class SendScheduleEmailRequest(BaseModel):
+    date:       Optional[str] = None   # YYYY-MM-DD, defaults to today
+    recipients: Optional[List[str]] = None  # defaults to SCHEDULE_EMAIL_RECIPIENTS env var
+
+
+@app.post("/schedule/send_daily_email")
+def schedule_send_daily_email(req: SendScheduleEmailRequest):
+    """Manually trigger the daily evaluation schedule email (for testing before the
+    midnight automation is wired up)."""
+    try:
+        import datetime as _dt
+        from daily_schedule_email import send_daily_schedule_email
+        target_date = _dt.date.fromisoformat(req.date) if req.date else _dt.date.today()
+        result = send_daily_schedule_email(target_date, req.recipients)
+        return result
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
     except Exception as exc:
         traceback.print_exc()
         return JSONResponse({"error": str(exc)}, status_code=500)
