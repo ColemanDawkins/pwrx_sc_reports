@@ -2175,7 +2175,8 @@ def ingest_vald_slj(path: str) -> dict:
 
 def ingest_sprints(path: str) -> dict:
     """
-    Ingest a sprint timing CSV (20m sprint with a split gate at 10m).
+    Ingest a sprint timing CSV/XLSX (20m sprint with a split gate at 10m).
+    For XLSX files, reads the sheet named "Sprint" specifically.
 
     Expected columns:
         Athlete, Date, Exercise, Sprint #, Total Time (s), In-Beam Start,
@@ -2198,7 +2199,13 @@ def ingest_sprints(path: str) -> dict:
     import pandas as pd
 
     if path.endswith((".xlsx", ".xls")):
-        df = pd.read_excel(path, dtype=str)
+        try:
+            df = pd.read_excel(path, sheet_name="Sprint", dtype=str)
+        except ValueError as e:
+            available = pd.ExcelFile(path).sheet_names
+            raise ValueError(
+                f"Could not find a 'Sprint' sheet in this file. Available sheets: {available}"
+            ) from e
     else:
         df = pd.read_csv(path, dtype=str)
     df.columns = [c.strip() for c in df.columns]
