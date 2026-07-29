@@ -215,7 +215,7 @@ def send_daily_schedule_email(for_date: dt.date = None, recipients: list[str] = 
         )
         msg.attach(attachment)
 
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
         server.starttls()
         server.login(SMTP_USER, SMTP_PASSWORD)
         server.sendmail(EMAIL_FROM, recipients, msg.as_string())

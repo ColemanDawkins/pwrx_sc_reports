@@ -51,9 +51,9 @@ def _sched_api_get(path, **params):
         return {"error": str(exc)}, 500
 
 
-def _sched_api_post(path, json_body):
+def _sched_api_post(path, json_body, timeout=15):
     try:
-        r = requests.post(f"{API_URL}{path}", json=json_body, timeout=15)
+        r = requests.post(f"{API_URL}{path}", json=json_body, timeout=timeout)
         return r.json(), r.status_code
     except Exception as exc:
         return {"error": str(exc)}, 500
@@ -921,7 +921,7 @@ with tab6:
         payload = {"date": test_email_date.isoformat()}
         if test_email_to.strip():
             payload["recipients"] = [r.strip() for r in test_email_to.split(",") if r.strip()]
-        result, estatus = _sched_api_post("/schedule/send_daily_email", payload)
+        result, estatus = _sched_api_post("/schedule/send_daily_email", payload, timeout=60)
         if estatus == 200:
             st.success(
                 f"Sent to {', '.join(result['recipients'])} — "
