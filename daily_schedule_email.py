@@ -4,17 +4,22 @@ daily_schedule_email.py
 Builds and sends the daily "who's being evaluated today" email — a printable
 roster (HTML email body + PDF attachment) coaches can post on the wall.
 
+Sends via Resend (https://resend.com) over plain HTTPS. This is deliberately
+NOT SMTP — Railway blocks outbound SMTP (ports 25/465/587) on Free/Trial/Hobby
+plans, so Gmail/Outlook SMTP will fail with "Network is unreachable" no matter
+how the credentials are configured. Resend (or any HTTP-based email API) works
+fine since it's just a normal HTTPS request, same as every other API call this
+app already makes.
+
 Env vars required (set these in Railway / your deploy environment):
-    SMTP_HOST                 default: smtp.gmail.com
-    SMTP_PORT                 default: 587
-    SMTP_USER                 your Gmail address, e.g. schedule@pwrx.com
-    SMTP_PASSWORD             a 16-character Gmail App Password (NOT your normal
-                               Gmail password — Google requires an App Password
-                               for SMTP. Generate one at myaccount.google.com/apppasswords,
-                               which requires 2-Step Verification to be turned on
-                               for the account first)
-    EMAIL_FROM                optional, defaults to SMTP_USER
-    SCHEDULE_EMAIL_RECIPIENTS optional, comma-separated default recipient list
+    RESEND_API_KEY             from resend.com/api-keys
+    EMAIL_FROM                 sender address, e.g. "PWRX Schedule <schedule@yourdomain.com>"
+                                — must be on a domain you've verified in Resend
+                                (Settings > Domains). Until you verify a domain,
+                                Resend only lets you send from onboarding@resend.dev,
+                                and only to the email address on your Resend account
+                                — fine for this first test, not for real coach use.
+    SCHEDULE_EMAIL_RECIPIENTS  optional, comma-separated default recipient list
 
 Manual test usage:
     python daily_schedule_email.py --date 2026-07-30 --to coach@pwrx.com
@@ -24,13 +29,11 @@ SCHEDULE_EMAIL_RECIPIENTS.
 """
 
 import argparse
+import base64
 import datetime as dt
 import os
-import smtplib
-from email.mime.application import MIMEApplication
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 
+import requests
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet
@@ -44,12 +47,11 @@ from sc_db import get_schedule_day
 WRX_ORANGE = "#f4750d"
 DARK_NAVY  = "#0A1830"
 
-SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.gmail.com")
-SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
-SMTP_USER = os.environ.get("SMTP_USER")
-SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD")
-EMAIL_FROM = os.environ.get("EMAIL_FROM", SMTP_USER)
+RESEND_API_URL = "https://api.resend.com/emails"
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY")
+EMAIL_FROM = os.environ.get("EMAIL_FROM", "PWRX Schedule <onboarding@resend.dev>")
 DEFAULT_RECIPIENTS = os.environ.get("SCHEDULE_EMAIL_RECIPIENTS", "")
+
 
 
 def _format_time(t: str) -> str:
@@ -179,7 +181,7 @@ def build_pdf(sessions: list[dict], for_date: dt.date, out_path: str) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Send via Gmail SMTP
+# Send via Resend (HTTPS API — works from Railway; SMTP does not)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def send_daily_schedule_email(for_date: dt.date = None, recipients: list[str] = None,
@@ -192,36 +194,42 @@ def send_daily_schedule_email(for_date: dt.date = None, recipients: list[str] = 
 
     if not recipients:
         raise ValueError("No recipients provided and SCHEDULE_EMAIL_RECIPIENTS is not set.")
-    if not SMTP_USER or not SMTP_PASSWORD:
-        raise ValueError("SMTP_USER / SMTP_PASSWORD are not set in the environment.")
+    if not RESEND_API_KEY:
+        raise ValueError("RESEND_API_KEY is not set in the environment.")
 
     sessions = get_schedule_day(for_date)
 
     html = build_html(sessions, for_date)
     build_pdf(sessions, for_date, pdf_path)
 
-    msg = MIMEMultipart("mixed")
-    msg["Subject"] = f"PWRX Evaluation Schedule — {_format_date(for_date)}"
-    msg["From"] = EMAIL_FROM
-    msg["To"] = ", ".join(recipients)
-
-    msg.attach(MIMEText(html, "html"))
-
     with open(pdf_path, "rb") as f:
-        attachment = MIMEApplication(f.read(), _subtype="pdf")
-        attachment.add_header(
-            "Content-Disposition", "attachment",
-            filename=f"pwrx_schedule_{for_date.isoformat()}.pdf",
-        )
-        msg.attach(attachment)
+        pdf_b64 = base64.b64encode(f.read()).decode("utf-8")
 
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
-        server.starttls()
-        server.login(SMTP_USER, SMTP_PASSWORD)
-        server.sendmail(EMAIL_FROM, recipients, msg.as_string())
+    payload = {
+        "from": EMAIL_FROM,
+        "to": recipients,
+        "subject": f"PWRX Evaluation Schedule — {_format_date(for_date)}",
+        "html": html,
+        "attachments": [
+            {"filename": f"pwrx_schedule_{for_date.isoformat()}.pdf", "content": pdf_b64}
+        ],
+    }
+
+    resp = requests.post(
+        RESEND_API_URL,
+        headers={
+            "Authorization": f"Bearer {RESEND_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=20,
+    )
+
+    if resp.status_code >= 300:
+        raise RuntimeError(f"Resend API error ({resp.status_code}): {resp.text}")
 
     return {"status": "sent", "date": for_date.isoformat(), "recipients": recipients,
-            "session_count": len(sessions)}
+            "session_count": len(sessions), "resend_id": resp.json().get("id")}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
