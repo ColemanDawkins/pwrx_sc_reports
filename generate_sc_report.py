@@ -73,6 +73,8 @@ DATA = {
         ],
         "current": {"jump_height": 20.71, "peak_power": 5633, "rsi_mod": 0.773},
         "prev":    {"jump_height": 21.15, "peak_power": 5997, "rsi_mod": 0.699},
+        "abcmj": {"jump_height": 24.9, "peak_power": 8075, "rsi_mod": 0.60},
+        "slj":   {"peak_force_l": 2063, "peak_force_r": 2125, "asym_pct": 2.9, "dominant": "Right"},
     },
 
     # ArmCare — Throwing Arm Health
@@ -1332,6 +1334,18 @@ html,body{background:var(--bg);color:#E8F0F8;font-family:'Barlow Condensed',sans
 .sv{font-family:'Bebas Neue',sans-serif;font-size:20px;width:44px;text-align:right;}
 .div{height:1px;background:var(--border);margin:2px 0;flex-shrink:0;}
 .lbl{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:1px;flex-shrink:0;}
+.vfp-section-label{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:2px;margin-bottom:2px;}
+.vfp-num-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;}
+.vfp-num-grid-2{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;}
+.vfp-num-card{background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:8px;padding:10px 12px;display:flex;flex-direction:column;}
+.vfp-nv{font-family:'Bebas Neue',sans-serif;font-size:30px;line-height:1;color:var(--vald);}
+.vfp-nu{font-size:12px;color:var(--muted);margin-left:2px;}
+.vfp-nl{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-top:3px;}
+.vfp-asym-bar-wrap{display:flex;align-items:center;gap:8px;margin-top:4px;}
+.vfp-asym-label{font-size:9px;color:var(--muted);width:16px;text-align:center;}
+.vfp-asym-track{flex:1;height:6px;background:rgba(255,255,255,0.07);border-radius:3px;overflow:hidden;position:relative;}
+.vfp-asym-fill-l{height:100%;background:var(--vald);border-radius:3px;float:right;}
+.vfp-asym-fill-r{height:100%;background:#60a5fa;border-radius:3px;}
 .focus-item{display:flex;align-items:center;gap:8px;padding:6px 8px;background:rgba(255,255,255,0.03);border-radius:6px;margin-bottom:5px;}
 .focus-num{width:18px;height:18px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-family:'Bebas Neue',sans-serif;font-size:11px;color:#fff;}
 .focus-name{font-size:11px;color:#C5D6E8;font-weight:600;}
@@ -1432,18 +1446,74 @@ html,body{background:var(--bg);color:#E8F0F8;font-family:'Barlow Condensed',sans
 
   <!-- VALD -->
   <div class="card vald">
-    <div class="card-hdr vald" style="justify-content:space-between;"><img src="{{ vald_logo }}" style="height:20px;width:auto;"/><span style="font-family:'Bebas Neue',sans-serif;font-size:13px;letter-spacing:2px;text-transform:uppercase;color:var(--vald);">Countermovement Jump</span></div>
-    <div class="card-body">
-      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;">
-        <div class="num-card vald"><div class="nv lg">{{ vald.current.jump_height }}</div><div class="nl">Jump Height (in)</div>{% if vald.prev %}{{ chip(vald.current.jump_height, vald.prev.jump_height)|safe }}{% endif %}</div>
-        <div class="num-card vald"><div class="nv lg">{{ vald.current.rsi_mod }}</div><div class="nl">RSI-Modified</div>{% if vald.prev %}{{ chip(vald.current.rsi_mod, vald.prev.rsi_mod)|safe }}{% endif %}</div>
-        <div class="num-card vald"><div class="nv lg">{{ "{:,.0f}".format(vald.current.peak_power) }}</div><div class="nl">Peak Power (W)</div>{% if vald.prev %}{{ chip(vald.current.peak_power, vald.prev.peak_power)|safe }}{% endif %}</div>
+    <div class="card-hdr vald" style="justify-content:space-between;"><img src="{{ vald_logo }}" style="height:20px;width:auto;"/><span style="font-family:'Bebas Neue',sans-serif;font-size:13px;letter-spacing:2px;text-transform:uppercase;color:var(--vald);">Force Decks</span></div>
+    <div class="card-body" style="gap:8px;">
+
+      <div class="vfp-section-label">Counter Movement Jump (CMJ)</div>
+      <div class="vfp-num-grid">
+        <div class="vfp-num-card">
+          <div class="vfp-nv">{{ vald.current.jump_height }}<span class="vfp-nu">in</span></div>
+          <div class="vfp-nl">Jump Height</div>
+        </div>
+        <div class="vfp-num-card">
+          <div class="vfp-nv">{{ "{:,.0f}".format(vald.current.peak_power) }}<span class="vfp-nu">W</span></div>
+          <div class="vfp-nl">Peak Power</div>
+        </div>
+        <div class="vfp-num-card">
+          <div class="vfp-nv">{{ vald.current.rsi_mod }}<span class="vfp-nu">m/s</span></div>
+          <div class="vfp-nl">RSI-Modified</div>
+        </div>
       </div>
+
+      {% if vald.abcmj %}
       <div class="div"></div>
-      <div class="lbl">Relative Performance</div>
-      <div class="sr"><div class="sn">Jump Height</div><div class="sb"><div class="sbf" style="width:{{ [vald.current.jump_height / 40 * 100, 100] | min }}%;background:var(--vald);"></div></div><div class="sv" style="color:var(--vald);">{{ vald.current.jump_height }}</div></div>
-      <div class="sr"><div class="sn">RSI-Mod</div><div class="sb"><div class="sbf" style="width:{{ [vald.current.rsi_mod / 1.5 * 100, 100] | min }}%;background:var(--vald);"></div></div><div class="sv" style="color:var(--vald);">{{ vald.current.rsi_mod }}</div></div>
-      <div class="sr"><div class="sn">Peak Power</div><div class="sb"><div class="sbf" style="width:{{ [vald.current.peak_power / 7000 * 100, 100] | min }}%;background:var(--vald);"></div></div><div class="sv" style="color:var(--vald);">{{ "{:.1f}".format(vald.current.peak_power / 1000) }}k</div></div>
+      <div class="vfp-section-label">Abalakov CMJ (ABCMJ)</div>
+      <div class="vfp-num-grid">
+        <div class="vfp-num-card">
+          <div class="vfp-nv">{{ vald.abcmj.jump_height }}<span class="vfp-nu">in</span></div>
+          <div class="vfp-nl">Jump Height</div>
+        </div>
+        <div class="vfp-num-card">
+          <div class="vfp-nv">{{ "{:,.0f}".format(vald.abcmj.peak_power) }}<span class="vfp-nu">W</span></div>
+          <div class="vfp-nl">Peak Power</div>
+        </div>
+        <div class="vfp-num-card">
+          <div class="vfp-nv">{{ vald.abcmj.rsi_mod if vald.abcmj.rsi_mod is not none else "—" }}<span class="vfp-nu">m/s</span></div>
+          <div class="vfp-nl">RSI-Modified</div>
+        </div>
+      </div>
+      {% endif %}
+
+      {% if vald.slj %}
+      <div class="div"></div>
+      <div class="vfp-section-label">Single Leg Jump — Peak Force</div>
+      <div class="vfp-num-grid-2">
+        <div class="vfp-num-card">
+          <div style="font-size:9px;color:var(--vald);text-transform:uppercase;letter-spacing:1px;margin-bottom:2px;">Left</div>
+          <div class="vfp-nv">{{ "{:,.0f}".format(vald.slj.peak_force_l) }}<span class="vfp-nu">N</span></div>
+          <div class="vfp-nl">Concentric Peak Force</div>
+        </div>
+        <div class="vfp-num-card">
+          <div style="font-size:9px;color:#60a5fa;text-transform:uppercase;letter-spacing:1px;margin-bottom:2px;">Right</div>
+          <div class="vfp-nv" style="color:#60a5fa;">{{ "{:,.0f}".format(vald.slj.peak_force_r) }}<span class="vfp-nu" style="color:var(--muted);">N</span></div>
+          <div class="vfp-nl">Concentric Peak Force</div>
+        </div>
+      </div>
+      <div style="padding:2px 0 0;">
+        <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;">L/R Asymmetry — {{ vald.slj.asym_pct }}% {{ vald.slj.dominant }} dominant</div>
+        <div class="vfp-asym-bar-wrap">
+          <span class="vfp-asym-label" style="color:var(--vald);">L</span>
+          <div class="vfp-asym-track">
+            <div class="vfp-asym-fill-l" style="width:{{ (vald.slj.peak_force_l / (vald.slj.peak_force_l + vald.slj.peak_force_r) * 100) | round(1) }}%;"></div>
+          </div>
+          <div class="vfp-asym-track">
+            <div class="vfp-asym-fill-r" style="width:{{ (vald.slj.peak_force_r / (vald.slj.peak_force_l + vald.slj.peak_force_r) * 100) | round(1) }}%;"></div>
+          </div>
+          <span class="vfp-asym-label" style="color:#60a5fa;">R</span>
+        </div>
+      </div>
+      {% endif %}
+
     </div>
   </div>
 

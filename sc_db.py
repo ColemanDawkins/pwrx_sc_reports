@@ -1622,6 +1622,30 @@ def load_athlete_data(athlete_name: str) -> dict:
     """, (uid, MAX_SESSIONS))
     vald_rows = list(reversed(cur.fetchall()))
 
+    # ── Vald ABCMJ (Abalakov CMJ — same table as CMJ, different test_type) ────
+    cur.execute("""
+        SELECT test_date, jump_height_flight_in, peak_power_w, rsi_modified
+        FROM vald_performance
+        WHERE master_uid = %s
+          AND test_type = 'ABCMJ'
+          AND test_date IS NOT NULL
+          AND jump_height_flight_in IS NOT NULL
+          AND peak_power_w IS NOT NULL
+        ORDER BY test_date DESC LIMIT 1
+    """, (uid,))
+    abcmj_row = cur.fetchone()
+
+    # ── Vald Single Leg Jump (separate table) ──────────────────────────────
+    cur.execute("""
+        SELECT exam_date, peak_force_l, peak_force_r
+        FROM vald_slj
+        WHERE master_uid = %s
+          AND peak_force_l IS NOT NULL
+          AND peak_force_r IS NOT NULL
+        ORDER BY exam_date DESC, exam_time DESC LIMIT 1
+    """, (uid,))
+    slj_row = cur.fetchone()
+
     # ── ArmCare ─────────────────────────────────────────────────────────────
     cur.execute("""
         SELECT exam_date, arm_score, total_strength,
@@ -1775,6 +1799,22 @@ def load_athlete_data(athlete_name: str) -> dict:
             "trend":   vald_trend,
             "current": vald_trend[-1],
             "prev":    vald_trend[-2] if len(vald_trend) >= 2 else vald_trend[-1],
+            "abcmj": ({
+                "jump_height": round(_safe_float(abcmj_row["jump_height_flight_in"]), 1),
+                "peak_power":  int(_safe_float(abcmj_row["peak_power_w"])),
+                "rsi_mod":     round(_safe_float(abcmj_row["rsi_modified"]), 2)
+                               if abcmj_row.get("rsi_modified") is not None else None,
+            } if abcmj_row else None),
+            "slj": ({
+                "peak_force_l": round(_safe_float(slj_row["peak_force_l"]), 0),
+                "peak_force_r": round(_safe_float(slj_row["peak_force_r"]), 0),
+                "asym_pct": (
+                    round(abs(_safe_float(slj_row["peak_force_r"]) - _safe_float(slj_row["peak_force_l"]))
+                          / ((_safe_float(slj_row["peak_force_r"]) + _safe_float(slj_row["peak_force_l"])) / 2) * 100, 1)
+                    if (_safe_float(slj_row["peak_force_r"]) + _safe_float(slj_row["peak_force_l"])) > 0 else 0
+                ),
+                "dominant": "Right" if _safe_float(slj_row["peak_force_r"]) >= _safe_float(slj_row["peak_force_l"]) else "Left",
+            } if slj_row else None),
         },
         "arm": {
             "trend":   arm_trend,
