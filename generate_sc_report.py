@@ -16,6 +16,7 @@ Usage:
     python generate_sc_report.py --athlete "Jane Doe" --out reports/jane_doe.html
 ─────────────────────────────────────────────────────────────────────────────
 """
+u = 1 
 
 import argparse
 import base64

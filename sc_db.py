@@ -19,6 +19,7 @@ Usage:
     python sc_db.py dari_export.csv --table dari_motion
     python sc_db.py --athlete "Isaac Stebens"        # print session counts
 """
+u = 1
 
 import os
 import re
@@ -34,7 +35,6 @@ import numpy as np
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
 MAX_SESSIONS = 4   # last N sessions pulled for reports
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SCHEMA
