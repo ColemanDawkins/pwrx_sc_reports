@@ -66,14 +66,24 @@ DATA = {
     # VALD Force Decks — Countermovement Jump
     "vald": {
         "trend": [
-            {"session": "Oct '24", "jump_height": 19.89, "peak_power": 5603, "rsi_mod": 0.671},
-            {"session": "Dec '24", "jump_height": 20.82, "peak_power": 5853, "rsi_mod": 0.719},
-            {"session": "Jan '25", "jump_height": 21.15, "peak_power": 5997, "rsi_mod": 0.699},
-            {"session": "Jan '26", "jump_height": 20.71, "peak_power": 5633, "rsi_mod": 0.773},
+            {"session": "Oct '24", "date_iso": "2024-10-15", "jump_height": 19.89, "peak_power": 5603, "rsi_mod": 0.671},
+            {"session": "Dec '24", "date_iso": "2024-12-10", "jump_height": 20.82, "peak_power": 5853, "rsi_mod": 0.719},
+            {"session": "Jan '25", "date_iso": "2025-01-20", "jump_height": 21.15, "peak_power": 5997, "rsi_mod": 0.699},
+            {"session": "Jan '26", "date_iso": "2026-01-15", "jump_height": 20.71, "peak_power": 5633, "rsi_mod": 0.773},
         ],
         "current": {"jump_height": 20.71, "peak_power": 5633, "rsi_mod": 0.773},
         "prev":    {"jump_height": 21.15, "peak_power": 5997, "rsi_mod": 0.699},
+        "abcmj_trend": [
+            {"session": "Dec '24", "date_iso": "2024-12-10", "jump_height": 23.40, "peak_power": 7580, "rsi_mod": 0.58},
+            {"session": "Jan '25", "date_iso": "2025-01-20", "jump_height": 24.10, "peak_power": 7820, "rsi_mod": 0.62},
+            {"session": "Jan '26", "date_iso": "2026-01-15", "jump_height": 24.9,  "peak_power": 8075, "rsi_mod": 0.60},
+        ],
         "abcmj": {"jump_height": 24.9, "peak_power": 8075, "rsi_mod": 0.60},
+        "slj_trend": [
+            {"session": "Dec '24", "date_iso": "2024-12-10", "jump_height_l": 11.2, "jump_height_r": 11.8, "peak_force_l": 1920, "peak_force_r": 1985},
+            {"session": "Jan '25", "date_iso": "2025-01-20", "jump_height_l": 11.6, "jump_height_r": 12.0, "peak_force_l": 1990, "peak_force_r": 2040},
+            {"session": "Jan '26", "date_iso": "2026-01-15", "jump_height_l": 11.9, "jump_height_r": 12.3, "peak_force_l": 2063, "peak_force_r": 2125},
+        ],
         "slj":   {"peak_force_l": 2063, "peak_force_r": 2125, "asym_pct": 2.9, "dominant": "Right"},
     },
 
@@ -113,6 +123,16 @@ DATA = {
             {"segment": "L Leg",  "lean_mass": 23.46, "highlight": False},
         ],
     },
+
+    # OVR Sprints — 20m sprint, split gate at 10m
+    "sprints": {
+        "date_full": "Jul 29, 2026",
+        "exercise": "20yd Sprint",
+        "total_time_s": 2.8,
+        "split_1_time_s": 1.65,
+        "split_2_time_s": 1.15,
+        "split_ratio": 1.435,
+    },
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -133,6 +153,8 @@ C = {
     "green":   "#22c55e",
     "amber":   "#f59e0b",
     "purple":  "#a855f7",
+    "wrx_orange": "#f4750d",
+    "wrx_blue":   "#41b6e6",
     "panel":   "rgba(10,24,48,0.95)",
     "border":  "rgba(33,150,243,0.14)",
 }
@@ -274,19 +296,49 @@ def chart_dari_dysfunction(data):
     return _fig_to_html(fig, 110)
 
 
-def chart_vald_jump_height(data):
-    rows = data["vald"]["trend"]
-    sessions = [r["session"] for r in rows]
-    x = range(len(sessions))
-    vals = [r["jump_height"] for r in rows]
+def _merge_vald_series(cmj_rows, abcmj_rows, metric):
+    """
+    Build a combined chronological x-axis (by date) from CMJ and ABCMJ trend
+    rows, which may be tested on different dates. Returns (labels, cmj_vals,
+    abcmj_vals) where a missing value at a given date is NaN, so matplotlib
+    draws a gap instead of a wrong/interpolated point.
+    """
+    import math
+
+    by_date = {}
+    for r in cmj_rows:
+        by_date.setdefault(r["date_iso"], {"label": r["session"]})["cmj"] = r.get(metric)
+    for r in abcmj_rows:
+        by_date.setdefault(r["date_iso"], {"label": r["session"]})["abcmj"] = r.get(metric)
+
+    dates = sorted(by_date.keys())
+    labels   = [by_date[d]["label"] for d in dates]
+    cmj_vals   = [by_date[d].get("cmj", math.nan) if by_date[d].get("cmj") is not None else math.nan for d in dates]
+    abcmj_vals = [by_date[d].get("abcmj", math.nan) if by_date[d].get("abcmj") is not None else math.nan for d in dates]
+    return labels, cmj_vals, abcmj_vals
+
+
+def _plot_vald_dual_line(data, metric, min_spread):
+    cmj_rows   = data["vald"]["trend"]
+    abcmj_rows = data["vald"].get("abcmj_trend") or []
+    labels, cmj_vals, abcmj_vals = _merge_vald_series(cmj_rows, abcmj_rows, metric)
+    x = range(len(labels))
 
     fig, ax = _make_fig(4.2, 1.2)
     ax.set_facecolor("none")
-    ax.plot(x, vals, color=C["purple"], linewidth=2, marker="o", markersize=5)
-    ax.fill_between(x, vals, alpha=0.15, color=C["purple"])
-    _dynamic_ylim(ax, vals, pad_pct=0.15, min_spread=2)
+
+    ax.plot(x, cmj_vals, color=C["wrx_orange"], linewidth=2, marker="o", markersize=5, label="CMJ")
+    ax.fill_between(x, cmj_vals, alpha=0.15, color=C["wrx_orange"])
+
+    if any(v == v for v in abcmj_vals):  # v==v is False only for NaN
+        ax.plot(x, abcmj_vals, color=C["wrx_blue"], linewidth=2, marker="o", markersize=5, label="ABCMJ")
+        ax.fill_between(x, abcmj_vals, alpha=0.15, color=C["wrx_blue"])
+        ax.legend(loc="upper left", fontsize=6, framealpha=0, labelcolor=C["grey"], handlelength=1.2)
+
+    all_vals = [v for v in cmj_vals + abcmj_vals if v == v]
+    _dynamic_ylim(ax, all_vals, pad_pct=0.15, min_spread=min_spread)
     ax.set_xticks(list(x))
-    ax.set_xticklabels(sessions, fontsize=7, color=C["grey"])
+    ax.set_xticklabels(labels, fontsize=7, color=C["grey"])
     ax.tick_params(axis="y", colors=C["grey"], labelsize=7)
     for spine in ax.spines.values():
         spine.set_visible(False)
@@ -294,19 +346,39 @@ def chart_vald_jump_height(data):
     ax.set_axisbelow(True)
     fig.tight_layout(pad=0.3)
     return _fig_to_html(fig, 120)
+
+
+def chart_vald_jump_height(data):
+    return _plot_vald_dual_line(data, "jump_height", min_spread=2)
 
 
 def chart_vald_rsi(data):
-    rows = data["vald"]["trend"]
+    return _plot_vald_dual_line(data, "rsi_mod", min_spread=0.1)
+
+
+def chart_vald_power(data):
+    return _plot_vald_dual_line(data, "peak_power", min_spread=500)
+
+
+def chart_vald_slj_jump_height(data):
+    """
+    Single Leg Jump — flight jump height, Left vs Right, from vald_slj.
+    """
+    rows = data["vald"].get("slj_trend") or []
     sessions = [r["session"] for r in rows]
     x = range(len(sessions))
-    vals = [r["rsi_mod"] for r in rows]
+    left_vals  = [r["jump_height_l"] for r in rows]
+    right_vals = [r["jump_height_r"] for r in rows]
 
     fig, ax = _make_fig(4.2, 1.2)
     ax.set_facecolor("none")
-    ax.plot(x, vals, color=C["green"], linewidth=2, marker="o", markersize=5)
-    ax.fill_between(x, vals, alpha=0.15, color=C["green"])
-    _dynamic_ylim(ax, vals, pad_pct=0.15, min_spread=0.1)
+    ax.plot(x, left_vals, color=C["wrx_orange"], linewidth=2, marker="o", markersize=5, label="Left")
+    ax.fill_between(x, left_vals, alpha=0.15, color=C["wrx_orange"])
+    ax.plot(x, right_vals, color=C["wrx_blue"], linewidth=2, marker="o", markersize=5, label="Right")
+    ax.fill_between(x, right_vals, alpha=0.15, color=C["wrx_blue"])
+    ax.legend(loc="upper left", fontsize=6, framealpha=0, labelcolor=C["grey"], handlelength=1.2)
+
+    _dynamic_ylim(ax, left_vals + right_vals, pad_pct=0.15, min_spread=2)
     ax.set_xticks(list(x))
     ax.set_xticklabels(sessions, fontsize=7, color=C["grey"])
     ax.tick_params(axis="y", colors=C["grey"], labelsize=7)
@@ -318,18 +390,25 @@ def chart_vald_rsi(data):
     return _fig_to_html(fig, 120)
 
 
-def chart_vald_power(data):
-    rows = data["vald"]["trend"]
+def chart_vald_slj_peak_force(data):
+    """
+    Single Leg Jump — concentric peak force, Left vs Right, from vald_slj.
+    """
+    rows = data["vald"].get("slj_trend") or []
     sessions = [r["session"] for r in rows]
     x = range(len(sessions))
-    vals = [r["peak_power"] for r in rows]
+    left_vals  = [r["peak_force_l"] for r in rows]
+    right_vals = [r["peak_force_r"] for r in rows]
 
     fig, ax = _make_fig(4.2, 1.2)
     ax.set_facecolor("none")
+    ax.plot(x, left_vals, color=C["wrx_orange"], linewidth=2, marker="o", markersize=5, label="Left")
+    ax.fill_between(x, left_vals, alpha=0.15, color=C["wrx_orange"])
+    ax.plot(x, right_vals, color=C["wrx_blue"], linewidth=2, marker="o", markersize=5, label="Right")
+    ax.fill_between(x, right_vals, alpha=0.15, color=C["wrx_blue"])
+    ax.legend(loc="upper left", fontsize=6, framealpha=0, labelcolor=C["grey"], handlelength=1.2)
 
-    ax.plot(x, vals, color=C["blueL"], linewidth=2, marker="o", markersize=5)
-    ax.fill_between(x, vals, alpha=0.15, color=C["blueL"])
-    _dynamic_ylim(ax, vals, pad_pct=0.15, min_spread=500)
+    _dynamic_ylim(ax, left_vals + right_vals, pad_pct=0.15, min_spread=200)
     ax.set_xticks(list(x))
     ax.set_xticklabels(sessions, fontsize=7, color=C["grey"])
     ax.tick_params(axis="y", colors=C["grey"], labelsize=7)
@@ -337,7 +416,6 @@ def chart_vald_power(data):
         spine.set_visible(False)
     ax.grid(axis="y", color="#1a2d45", linewidth=0.5, alpha=0.6)
     ax.set_axisbelow(True)
-
     fig.tight_layout(pad=0.3)
     return _fig_to_html(fig, 120)
 
@@ -1300,7 +1378,7 @@ TEMPLATE = r"""<!DOCTYPE html>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{--bg:#04101E;--panel:#071828;--border:rgba(255,255,255,0.07);
-  --dari:#38A3A5;--vald:#FF7A00;--arm:#EF4444;--inbody:#2563EB;--muted:#5A7A9A;}
+  --dari:#38A3A5;--vald:#FF7A00;--arm:#EF4444;--inbody:#2563EB;--muted:#5A7A9A;--sprint:#41b6e6;}
 html,body{background:var(--bg);color:#E8F0F8;font-family:'Barlow Condensed',sans-serif;}
 .hdr{background:linear-gradient(135deg,#04101E,#071828);border-bottom:3px solid #E8621A;
   padding:0 24px;height:56px;display:flex;align-items:center;justify-content:space-between;}
@@ -1318,6 +1396,9 @@ html,body{background:var(--bg);color:#E8F0F8;font-family:'Barlow Condensed',sans
 .card-hdr.arm   {border-color:var(--arm);background:rgba(239,68,68,0.15);}
 .card-hdr.inbody{border-color:var(--inbody);background:rgba(37,99,235,0.15);}
 .card-body{flex:1;padding:10px 14px;display:flex;flex-direction:column;gap:6px;overflow:hidden;}
+.card.vald .card-body{gap:4px;}
+.card.vald .vfp-num-card{padding:8px 10px;}
+.card.vald .div{margin:1px 0;}
 .num-card{background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:8px;
   padding:8px 6px 6px;text-align:center;display:flex;flex-direction:column;align-items:center;}
 .nv{font-family:'Bebas Neue',sans-serif;font-size:44px;line-height:1;}
@@ -1334,7 +1415,8 @@ html,body{background:var(--bg);color:#E8F0F8;font-family:'Barlow Condensed',sans
 .sv{font-family:'Bebas Neue',sans-serif;font-size:20px;width:44px;text-align:right;}
 .div{height:1px;background:var(--border);margin:2px 0;flex-shrink:0;}
 .lbl{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:1px;flex-shrink:0;}
-.vfp-section-label{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:2px;margin-bottom:2px;}
+.vfp-section-label{display:flex;justify-content:space-between;align-items:baseline;font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:2px;margin-bottom:2px;}
+.vfp-section-date{font-size:9px;color:var(--muted);text-transform:none;letter-spacing:0.5px;}
 .vfp-num-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;}
 .vfp-num-grid-2{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;}
 .vfp-num-card{background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:8px;padding:10px 12px;display:flex;flex-direction:column;}
@@ -1363,7 +1445,15 @@ html,body{background:var(--bg);color:#E8F0F8;font-family:'Barlow Condensed',sans
 .p3-panel{margin:8px;background:var(--panel);border-radius:10px;border:1px solid var(--border);overflow:hidden;}
 .p3-hdr{padding:0 14px;height:42px;display:flex;align-items:center;gap:8px;border-bottom:2px solid #f4750d;
   font-family:'Bebas Neue',sans-serif;font-size:15px;letter-spacing:2px;color:#fff;}
+.p3-hdr.sprint{border-bottom-color:var(--sprint);}
 .p3-body{padding:14px;display:flex;justify-content:center;}
+.sprint-body{padding:14px;}
+.sprint-date{font-size:11px;color:var(--muted);margin-bottom:10px;}
+.sprint-num-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;}
+.sprint-num-card{background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:8px;padding:14px 12px;text-align:center;}
+.sprint-nv{font-family:'Bebas Neue',sans-serif;font-size:38px;line-height:1;color:var(--sprint);}
+.sprint-nu{font-size:12px;color:var(--muted);margin-left:2px;}
+.sprint-nl{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-top:4px;}
 @media (max-width:768px){
   .p1-grid{grid-template-columns:1fr;grid-template-rows:auto;height:auto;min-height:unset;}
   .p2-grid{grid-template-columns:1fr !important;}
@@ -1449,7 +1539,7 @@ html,body{background:var(--bg);color:#E8F0F8;font-family:'Barlow Condensed',sans
     <div class="card-hdr vald" style="justify-content:space-between;"><img src="{{ vald_logo }}" style="height:20px;width:auto;"/><span style="font-family:'Bebas Neue',sans-serif;font-size:13px;letter-spacing:2px;text-transform:uppercase;color:var(--vald);">Force Decks</span></div>
     <div class="card-body" style="gap:8px;">
 
-      <div class="vfp-section-label">Counter Movement Jump (CMJ)</div>
+      <div class="vfp-section-label"><span>Counter Movement Jump (CMJ)</span><span class="vfp-section-date">{{ vald.current.date_full }}</span></div>
       <div class="vfp-num-grid">
         <div class="vfp-num-card">
           <div class="vfp-nv">{{ vald.current.jump_height }}<span class="vfp-nu">in</span></div>
@@ -1467,7 +1557,7 @@ html,body{background:var(--bg);color:#E8F0F8;font-family:'Barlow Condensed',sans
 
       {% if vald.abcmj %}
       <div class="div"></div>
-      <div class="vfp-section-label">Abalakov CMJ (ABCMJ)</div>
+      <div class="vfp-section-label"><span>Abalakov CMJ (ABCMJ)</span><span class="vfp-section-date">{{ vald.abcmj.date_full }}</span></div>
       <div class="vfp-num-grid">
         <div class="vfp-num-card">
           <div class="vfp-nv">{{ vald.abcmj.jump_height }}<span class="vfp-nu">in</span></div>
@@ -1486,7 +1576,7 @@ html,body{background:var(--bg);color:#E8F0F8;font-family:'Barlow Condensed',sans
 
       {% if vald.slj %}
       <div class="div"></div>
-      <div class="vfp-section-label">Single Leg Jump — Peak Force</div>
+      <div class="vfp-section-label"><span>Single Leg Jump — Peak Force</span><span class="vfp-section-date">{{ vald.slj.date_full }}</span></div>
       <div class="vfp-num-grid-2">
         <div class="vfp-num-card">
           <div style="font-size:9px;color:var(--vald);text-transform:uppercase;letter-spacing:1px;margin-bottom:2px;">Left</div>
@@ -1583,6 +1673,15 @@ html,body{background:var(--bg);color:#E8F0F8;font-family:'Barlow Condensed',sans
       <div class="cl">Peak Power (W)</div>{{ chart_vald_power }}
     </div>
   </div>
+  {% if vald.slj_trend %}
+  <div class="p2-card">
+    <div class="p2-hdr" style="border-bottom:2px solid var(--sprint);"><img src="{{ vald_logo }}" style="height:14px;width:auto;"/> Vald — Single Leg Jump Trends</div>
+    <div class="p2-body">
+      <div class="cl">Jump Height (in) — Left / Right</div>{{ chart_vald_slj_jump_height }}
+      <div class="cl">Peak Force (N) — Left / Right</div>{{ chart_vald_slj_peak_force }}
+    </div>
+  </div>
+  {% endif %}
   <div class="p2-card">
     <div class="p2-hdr" style="border-bottom:2px solid var(--arm);"><img src="{{ armcare_logo }}" style="height:16px;width:auto;border-radius:2px;"/> ArmCare — Trends</div>
     <div class="p2-body">
@@ -1606,6 +1705,33 @@ html,body{background:var(--bg);color:#E8F0F8;font-family:'Barlow Condensed',sans
     </div>
   </div>
 </div>
+
+{% if sprints %}
+<div class="p3-panel">
+  <div class="p3-hdr sprint">OVR Sprints — 20m Sprint (Split Gate @ 10m) · Best Attempt</div>
+  <div class="sprint-body">
+    <div class="sprint-date">{{ sprints.exercise }} · {{ sprints.date_full }}</div>
+    <div class="sprint-num-grid">
+      <div class="sprint-num-card">
+        <div class="sprint-nv">{{ sprints.total_time_s }}<span class="sprint-nu">s</span></div>
+        <div class="sprint-nl">Total Time</div>
+      </div>
+      <div class="sprint-num-card">
+        <div class="sprint-nv">{{ sprints.split_1_time_s }}<span class="sprint-nu">s</span></div>
+        <div class="sprint-nl">Gate 1 (0&#8209;10m)</div>
+      </div>
+      <div class="sprint-num-card">
+        <div class="sprint-nv">{{ sprints.split_2_time_s }}<span class="sprint-nu">s</span></div>
+        <div class="sprint-nl">Gate 2 (10&#8209;20m)</div>
+      </div>
+      <div class="sprint-num-card">
+        <div class="sprint-nv">{{ sprints.split_ratio if sprints.split_ratio is not none else "—" }}</div>
+        <div class="sprint-nl">Gate 2 / Gate 1 Ratio</div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
 
 {% if decline_flags %}
 <div class="flag-panel">
@@ -1694,6 +1820,7 @@ def render_report(data: dict, out_path: str):
         arm            = data["arm"],
         inbody         = data["inbody"],
         inbody_prev    = inbody_prev,
+        sprints        = data.get("sprints"),
         body_scan_dots = build_body_scan_dots(data),
         decline_flags  = build_decline_flags(data),
         focus_list     = build_focus_list(data),
@@ -1703,6 +1830,8 @@ def render_report(data: dict, out_path: str):
         chart_vald_jump_height = chart_vald_jump_height(data),
         chart_vald_rsi         = chart_vald_rsi(data),
         chart_vald_power       = chart_vald_power(data),
+        chart_vald_slj_jump_height = chart_vald_slj_jump_height(data),
+        chart_vald_slj_peak_force  = chart_vald_slj_peak_force(data),
         chart_arm_score        = chart_arm_score(data),
         chart_arm_strength     = chart_arm_strength(data),
         chart_arm_svr          = chart_arm_svr(data),

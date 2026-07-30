@@ -1475,6 +1475,53 @@ def _fmt_label(date_val) -> str:
         return str(date_val)[:7]
 
 
+def _fmt_full_date(date_val) -> str:
+    """Convert date/timestamp to 'Jul 29, 2026' label."""
+    try:
+        if isinstance(date_val, str):
+            date_val = pd.to_datetime(date_val)
+        return date_val.strftime("%b %-d, %Y")
+    except Exception:
+        return str(date_val)[:10]
+
+
+def _build_sprint_summary(rows):
+    """
+    From all sprint rows for one athlete (ordered exam_date DESC), pick the
+    most recent test date, then return the best (fastest) complete attempt
+    from that date — total time, both split times, and the split ratio.
+    Returns None if there's no complete attempt (both splits present).
+    """
+    if not rows:
+        return None
+    most_recent_date = rows[0]["exam_date"]  # rows ordered exam_date DESC
+    day_rows = [r for r in rows if r["exam_date"] == most_recent_date]
+
+    attempts = {}
+    for r in day_rows:
+        att = attempts.setdefault(r["sprint_attempt"], {
+            "exercise": r["exercise"], "total_time_s": _safe_float(r["total_time_s"]),
+            "split_ratio": r["split_ratio"], "splits": {},
+        })
+        att["splits"][r["split_num"]] = _safe_float(r["split_time_s"])
+
+    complete_attempts = [a for a in attempts.values() if 1 in a["splits"] and 2 in a["splits"]]
+    if not complete_attempts:
+        return None
+
+    best = min(complete_attempts, key=lambda a: a["total_time_s"])
+    split_1 = best["splits"][1]
+    split_2 = best["splits"][2]
+    return {
+        "date_full":      _fmt_full_date(most_recent_date),
+        "exercise":       best["exercise"],
+        "total_time_s":   round(best["total_time_s"], 3),
+        "split_1_time_s": round(split_1, 3),
+        "split_2_time_s": round(split_2, 3),
+        "split_ratio":    round(split_2 / split_1, 3) if split_1 else None,
+    }
+
+
 def _safe_float(val, default=0.0) -> float:
     try:
         f = float(val)
@@ -1631,20 +1678,36 @@ def load_athlete_data(athlete_name: str) -> dict:
           AND test_date IS NOT NULL
           AND jump_height_flight_in IS NOT NULL
           AND peak_power_w IS NOT NULL
-        ORDER BY test_date DESC LIMIT 1
-    """, (uid,))
-    abcmj_row = cur.fetchone()
+        ORDER BY test_date DESC LIMIT %s
+    """, (uid, MAX_SESSIONS))
+    abcmj_rows = list(reversed(cur.fetchall()))
+    abcmj_row = abcmj_rows[-1] if abcmj_rows else None
 
     # ── Vald Single Leg Jump (separate table) ──────────────────────────────
     cur.execute("""
-        SELECT exam_date, peak_force_l, peak_force_r
+        SELECT exam_date, exam_time, peak_force_l, peak_force_r,
+               jump_height_flight_l, jump_height_flight_r
         FROM vald_slj
         WHERE master_uid = %s
           AND peak_force_l IS NOT NULL
           AND peak_force_r IS NOT NULL
-        ORDER BY exam_date DESC, exam_time DESC LIMIT 1
+        ORDER BY exam_date DESC, exam_time DESC LIMIT %s
+    """, (uid, MAX_SESSIONS))
+    slj_rows = list(reversed(cur.fetchall()))
+    slj_row = slj_rows[-1] if slj_rows else None
+
+    # ── OVR Sprints (20m sprint, split gate at 10m) ────────────────────────
+    # Pull every row from the athlete's most recent sprint date; the best
+    # (fastest) attempt for that date is picked in Python below.
+    cur.execute("""
+        SELECT exam_date, exercise, sprint_attempt, split_num,
+               split_time_s, total_time_s, split_ratio
+        FROM sprints
+        WHERE master_uid = %s
+          AND total_time_s IS NOT NULL
+        ORDER BY exam_date DESC
     """, (uid,))
-    slj_row = cur.fetchone()
+    sprint_rows = cur.fetchall()
 
     # ── ArmCare ─────────────────────────────────────────────────────────────
     cur.execute("""
@@ -1692,9 +1755,31 @@ def load_athlete_data(athlete_name: str) -> dict:
 
     def _vald_trend(rows):
         return [{"session":     _fmt_label(r["test_date"]),
+                 "date_full":   _fmt_full_date(r["test_date"]),
+                 "date_iso":    str(r["test_date"]),
                  "jump_height": round(_safe_float(r["jump_height_flight_in"]), 2),
                  "peak_power":  int(_safe_float(r["peak_power_w"])),
                  "rsi_mod":     round(_safe_float(r["rsi_modified"]), 3)} for r in rows]
+
+    def _abcmj_trend(rows):
+        return [{"session":     _fmt_label(r["test_date"]),
+                 "date_full":   _fmt_full_date(r["test_date"]),
+                 "date_iso":    str(r["test_date"]),
+                 "jump_height": round(_safe_float(r["jump_height_flight_in"]), 2),
+                 "peak_power":  int(_safe_float(r["peak_power_w"])),
+                 "rsi_mod":     round(_safe_float(r["rsi_modified"]), 3)
+                                if r.get("rsi_modified") is not None else None} for r in rows]
+
+    def _slj_trend(rows):
+        return [{"session":       _fmt_label(r["exam_date"]),
+                 "date_full":     _fmt_full_date(r["exam_date"]),
+                 "date_iso":      str(r["exam_date"]),
+                 "peak_force_l":  round(_safe_float(r["peak_force_l"]), 0),
+                 "peak_force_r":  round(_safe_float(r["peak_force_r"]), 0),
+                 "jump_height_l": round(_safe_float(r["jump_height_flight_l"]), 2)
+                                  if r.get("jump_height_flight_l") is not None else None,
+                 "jump_height_r": round(_safe_float(r["jump_height_flight_r"]), 2)
+                                  if r.get("jump_height_flight_r") is not None else None} for r in rows]
 
     def _arm_trend(rows):
         return [{"session":        _fmt_label(r["exam_date"]),
@@ -1705,15 +1790,20 @@ def load_athlete_data(athlete_name: str) -> dict:
 
     empty_dari = {"session": "N/A", "overall": 0, "athleticism": 0, "functionality": 0,
                   "explosiveness": 0, "dysfunction": 0}
-    empty_vald = {"session": "N/A", "jump_height": 0, "peak_power": 0, "rsi_mod": 0}
+    empty_vald = {"session": "N/A", "date_full": "N/A", "date_iso": "", "jump_height": 0, "peak_power": 0, "rsi_mod": 0}
     empty_arm  = {"session": "N/A", "arm_score": 0, "total_strength": 0,
                   "balance": 1.0, "svr": 0}
 
     dari_trend = _dari_trend(dari_rows) if dari_rows else [empty_dari]
     vald_trend = _vald_trend(vald_rows) if vald_rows else [empty_vald]
+    abcmj_trend = _abcmj_trend(abcmj_rows) if abcmj_rows else []
+    slj_trend   = _slj_trend(slj_rows) if slj_rows else []
     arm_trend  = _arm_trend(arm_rows)  if arm_rows  else [empty_arm]
 
     last_dari = dari_rows[-1] if dari_rows else {}
+
+    # ── OVR Sprints: best (fastest) attempt from the most recent test date ────
+    sprint_summary = _build_sprint_summary(sprint_rows)
 
     # ── Build focus trend: per-area history across all sessions ──────────────
     # Collect all unique focus area names seen across sessions
@@ -1796,16 +1886,20 @@ def load_athlete_data(athlete_name: str) -> dict:
             "vj": _safe_float(last_dari.get("dp7_jump_height")),
         },
         "vald": {
-            "trend":   vald_trend,
-            "current": vald_trend[-1],
-            "prev":    vald_trend[-2] if len(vald_trend) >= 2 else vald_trend[-1],
+            "trend":       vald_trend,
+            "current":     vald_trend[-1],
+            "prev":        vald_trend[-2] if len(vald_trend) >= 2 else vald_trend[-1],
+            "abcmj_trend": abcmj_trend,
+            "slj_trend":   slj_trend,
             "abcmj": ({
+                "date_full":   _fmt_full_date(abcmj_row["test_date"]),
                 "jump_height": round(_safe_float(abcmj_row["jump_height_flight_in"]), 1),
                 "peak_power":  int(_safe_float(abcmj_row["peak_power_w"])),
                 "rsi_mod":     round(_safe_float(abcmj_row["rsi_modified"]), 2)
                                if abcmj_row.get("rsi_modified") is not None else None,
             } if abcmj_row else None),
             "slj": ({
+                "date_full":    _fmt_full_date(slj_row["exam_date"]),
                 "peak_force_l": round(_safe_float(slj_row["peak_force_l"]), 0),
                 "peak_force_r": round(_safe_float(slj_row["peak_force_r"]), 0),
                 "asym_pct": (
@@ -1822,6 +1916,7 @@ def load_athlete_data(athlete_name: str) -> dict:
             "prev":    arm_trend[-2] if len(arm_trend) >= 2 else arm_trend[-1],
         },
         "inbody": _map_inbody(inbody_rows),
+        "sprints": sprint_summary,
         "data_coverage": {
             "dari":    len(dari_rows),
             "vald":    len(vald_rows),
@@ -2305,7 +2400,7 @@ def ingest_sprints(path: str) -> dict:
         s1 = group.loc[group["split_num"] == 1, "split_time_s"]
         s2 = group.loc[group["split_num"] == 2, "split_time_s"]
         if len(s1) == 1 and len(s2) == 1 and s2.iloc[0]:
-            ratio_lookup[key] = round(float(s1.iloc[0]) / float(s2.iloc[0]), 4)
+            ratio_lookup[key] = round(float(s2.iloc[0]) / float(s1.iloc[0]), 4)
         else:
             ratio_lookup[key] = None
 
