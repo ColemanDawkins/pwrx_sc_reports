@@ -780,7 +780,7 @@ with tab6:
                 c1, c2 = st.columns([5, 1])
                 with c1:
                     st.markdown(f"**{s['scheduled_time'][:5]}** — {s['athlete_name']}")
-                    st.caption(f"{tag} · {s['phone']}")
+                    st.caption(f"{tag} · {s['phone']}" if s.get("phone") else tag)
                     if s.get("notes"):
                         st.caption(f"📝 {s['notes']}")
                 with c2:
@@ -800,7 +800,7 @@ with tab6:
             c1, c2 = st.columns(2)
             with c1:
                 sched_athlete_name = st.text_input("Athlete Name", placeholder="First Last")
-                sched_phone = st.text_input("Phone Number", placeholder="(555) 555-5555")
+                sched_phone = st.text_input("Phone Number (optional)", placeholder="(555) 555-5555")
             with c2:
                 sched_slot_date = st.date_input("Evaluation Date", value=st.session_state.selected_date)
                 sched_slot_time = st.time_input("Evaluation Time", value=dt.time(9, 0))
@@ -809,8 +809,8 @@ with tab6:
             sched_submitted = st.form_submit_button("Check Athlete & Continue", type="primary")
 
         if sched_submitted:
-            if not sched_athlete_name.strip() or not sched_phone.strip():
-                st.error("Athlete name and phone number are required.")
+            if not sched_athlete_name.strip():
+                st.error("Athlete name is required.")
             else:
                 match, mstatus = _sched_api_post(
                     "/schedule/check_match",
@@ -832,8 +832,9 @@ with tab6:
     else:
         match = st.session_state.match_result
         slot = st.session_state.pending_slot
+        phone_part = f" · {slot['phone']}" if slot.get("phone") else ""
         st.write(
-            f"**{slot['athlete_name']}** · {slot['phone']} · "
+            f"**{slot['athlete_name']}**{phone_part} · "
             f"{slot['scheduled_date']} at {slot['scheduled_time']}"
         )
 

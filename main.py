@@ -526,12 +526,12 @@ async def ingest_sprints(file: UploadFile = File(...)):
 
 class CheckMatchRequest(BaseModel):
     athlete_name: str
-    phone:        str
+    phone:        Optional[str] = ""
 
 
 class BookSlotRequest(BaseModel):
     athlete_name:   str
-    phone:          str
+    phone:          Optional[str] = ""
     scheduled_date: str   # YYYY-MM-DD
     scheduled_time: str   # HH:MM
     action:         str   # "existing" | "new" | "update_phone"

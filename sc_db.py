@@ -2563,7 +2563,9 @@ def check_schedule_match(athlete_name: str, phone: str) -> dict:
         stored_phones.add(_clean_phone(row["pushpress_phone"]))
     stored_phones.discard("")
 
-    phone_match = bool(clean_phone) and clean_phone in stored_phones
+    # Phone is optional: if none was entered, there's nothing to conflict with,
+    # so treat a name match as good enough rather than forcing a resolution step.
+    phone_match = (not clean_phone) or (clean_phone in stored_phones)
 
     return {
         "name_found":   True,
@@ -2595,7 +2597,8 @@ def book_evaluation_session(athlete_name: str, phone: str, scheduled_date, sched
         last_name  = parts[1] if len(parts) > 1 else ""
         result = create_athlete(first_name, last_name, force=True)
         master_uid = result["master_uid"]
-        set_inbody_uid(master_uid, clean_phone)
+        if clean_phone:
+            set_inbody_uid(master_uid, clean_phone)
         match_status = "new"
 
     elif action == "update_phone":
