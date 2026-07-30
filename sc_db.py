@@ -1873,15 +1873,15 @@ def update_athlete_ids(master_uid: str, dari_id: str = None, phone: str = None,
 
     if phone is not None:
         clean_phone = re.sub(r"[^0-9]", "", phone)
-        cur.execute("UPDATE master_uid SET inbody_uid = %s WHERE master_uid = %s", (clean_phone, master_uid))
-        cur.execute("UPDATE pushpress SET phone = %s WHERE master_uid = %s", (clean_phone, master_uid))
+        cur.execute("UPDATE master_uid SET inbody_uid = %s WHERE master_uid = %s", (clean_phone or None, master_uid))
+        cur.execute("UPDATE pushpress SET phone = %s WHERE master_uid = %s", (clean_phone or None, master_uid))
         if cur.rowcount == 0:
             cur.execute("""
                 UPDATE pushpress SET phone = %s
                 WHERE LOWER(first_name || ' ' || last_name) = (
                     SELECT LOWER(full_name) FROM master_uid WHERE master_uid = %s
                 )
-            """, (clean_phone, master_uid))
+            """, (clean_phone or None, master_uid))
         updated["phone"] = clean_phone
 
     if pp_phone is not None:
@@ -1949,14 +1949,21 @@ def search_athletes(query: str) -> list[dict]:
 
 
 def set_inbody_uid(master_uid: str, inbody_uid: str) -> bool:
-    """Set or update the inbody_uid (phone number) for an athlete."""
+    """
+    Set or update the inbody_uid (phone number) for an athlete.
+
+    inbody_uid has a UNIQUE constraint, so a blank/whitespace value is always
+    written as NULL rather than '' — multiple NULLs are allowed under that
+    constraint, but multiple empty strings are not and will collide.
+    """
     conn = get_conn()
     cur  = conn.cursor()
+    clean = (inbody_uid or "").strip()
     cur.execute("""
         UPDATE master_uid
         SET inbody_uid = %s, updated_at = NOW()
         WHERE master_uid = %s
-    """, (inbody_uid.strip(), master_uid))
+    """, (clean or None, master_uid))
     updated = cur.rowcount > 0
     conn.commit()
     cur.close()
