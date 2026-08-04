@@ -733,6 +733,23 @@ with tab6:
         else:
             day_counts = {int(k): v for k, v in month_data.get("days", {}).items()}
 
+        st.markdown(
+            "<style>"
+            "div[data-testid='stVerticalBlock']:has(> div[class*='st-key-sched_day_']) {"
+            "  padding: 3px !important;"
+            "}"
+            "div[class*='st-key-sched_day_'] button {"
+            "  padding: 2px 2px !important;"
+            "  min-width: 0 !important;"
+            "}"
+            "div[class*='st-key-sched_day_'] button p {"
+            "  white-space: nowrap !important;"
+            "  font-size: 13px !important;"
+            "  margin: 0 !important;"
+            "}"
+            "</style>",
+            unsafe_allow_html=True,
+        )
         weekday_cols = st.columns(7)
         for i, wd in enumerate(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]):
             weekday_cols[i].markdown(f"<div style='text-align:center;font-weight:600;'>{wd}</div>", unsafe_allow_html=True)
@@ -743,34 +760,40 @@ with tab6:
             for i, day_num in enumerate(week):
                 with cols[i]:
                     if day_num == 0:
-                        st.markdown("<div style='height:58px;'>&nbsp;</div>", unsafe_allow_html=True)
+                        st.markdown("<div style='height:78px;'>&nbsp;</div>", unsafe_allow_html=True)
                         continue
                     counts = day_counts.get(day_num, {"total": 0, "new": 0, "existing": 0})
                     this_date = dt.date(st.session_state.cal_year, st.session_state.cal_month, day_num)
                     is_selected = this_date == st.session_state.selected_date
-                    if st.button(
-                        str(day_num),
-                        key=f"sched_day_{day_num}",
-                        use_container_width=True,
-                        type="primary" if is_selected else "secondary",
-                    ):
-                        st.session_state.selected_date = this_date
-                        _sched_reset_booking_flow()
-                        st.rerun()
 
-                    # Fixed-height badge row so every cell is the same total
-                    # height whether or not it has bookings (instead of
-                    # cramming counts into the button label, which wraps
-                    # unpredictably in a narrow column).
-                    badge_html = (
-                        f"🆕{counts.get('new', 0)} ✅{counts.get('existing', 0)}"
-                        if counts["total"] else "&nbsp;"
-                    )
-                    st.markdown(
-                        f"<div style='height:20px;line-height:20px;text-align:center;"
-                        f"font-size:11px;color:#8BA4BF;white-space:nowrap;'>{badge_html}</div>",
-                        unsafe_allow_html=True,
-                    )
+                    with st.container(border=True):
+                        if st.button(
+                            str(day_num),
+                            key=f"sched_day_{day_num}",
+                            use_container_width=True,
+                            type="primary" if is_selected else "secondary",
+                        ):
+                            st.session_state.selected_date = this_date
+                            _sched_reset_booking_flow()
+                            st.rerun()
+
+                        # Fixed-height badge row (plain colored dots, not emoji,
+                        # so nothing renders as its own little icon-box) so
+                        # every card is the same total height whether or not
+                        # it has bookings.
+                        if counts["total"]:
+                            badge_html = (
+                                f"<span style='color:#f4750d;'>&#9679;</span> {counts.get('new', 0)}"
+                                f"&nbsp;&nbsp;"
+                                f"<span style='color:#41b6e6;'>&#9679;</span> {counts.get('existing', 0)}"
+                            )
+                        else:
+                            badge_html = "&nbsp;"
+                        st.markdown(
+                            f"<div style='height:20px;line-height:20px;text-align:center;"
+                            f"font-size:11px;color:#8BA4BF;white-space:nowrap;'>{badge_html}</div>",
+                            unsafe_allow_html=True,
+                        )
 
     with day_col:
         sel = st.session_state.selected_date
