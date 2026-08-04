@@ -737,6 +737,9 @@ with tab6:
             "<style>"
             "div[data-testid='stVerticalBlock']:has(> div[class*='st-key-sched_day_']) {"
             "  padding: 3px !important;"
+            "  height: 66px !important;"
+            "  min-height: 66px !important;"
+            "  gap: 0px !important;"
             "}"
             "div[class*='st-key-sched_day_'] button {"
             "  padding: 2px 2px !important;"
@@ -746,6 +749,13 @@ with tab6:
             "  white-space: nowrap !important;"
             "  font-size: 13px !important;"
             "  margin: 0 !important;"
+            "}"
+            "div[data-testid='stVerticalBlock']:has(> div[class*='st-key-sched_day_']) div[data-testid='stElementContainer'],"
+            "div[data-testid='stVerticalBlock']:has(> div[class*='st-key-sched_day_']) div[data-testid='stMarkdown'],"
+            "div[data-testid='stVerticalBlock']:has(> div[class*='st-key-sched_day_']) div[data-testid='stMarkdown'] > div,"
+            "div[data-testid='stVerticalBlock']:has(> div[class*='st-key-sched_day_']) div[data-testid='stMarkdownContainer'] {"
+            "  height: auto !important;"
+            "  min-height: 0 !important;"
             "}"
             "</style>",
             unsafe_allow_html=True,
