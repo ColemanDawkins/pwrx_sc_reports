@@ -743,16 +743,13 @@ with tab6:
             for i, day_num in enumerate(week):
                 with cols[i]:
                     if day_num == 0:
-                        st.write("")
+                        st.markdown("<div style='height:58px;'>&nbsp;</div>", unsafe_allow_html=True)
                         continue
                     counts = day_counts.get(day_num, {"total": 0, "new": 0, "existing": 0})
                     this_date = dt.date(st.session_state.cal_year, st.session_state.cal_month, day_num)
-                    label = str(day_num)
-                    if counts["total"]:
-                        label += f"\n🆕{counts.get('new', 0)} ✅{counts.get('existing', 0)}"
                     is_selected = this_date == st.session_state.selected_date
                     if st.button(
-                        label,
+                        str(day_num),
                         key=f"sched_day_{day_num}",
                         use_container_width=True,
                         type="primary" if is_selected else "secondary",
@@ -760,6 +757,20 @@ with tab6:
                         st.session_state.selected_date = this_date
                         _sched_reset_booking_flow()
                         st.rerun()
+
+                    # Fixed-height badge row so every cell is the same total
+                    # height whether or not it has bookings (instead of
+                    # cramming counts into the button label, which wraps
+                    # unpredictably in a narrow column).
+                    badge_html = (
+                        f"🆕{counts.get('new', 0)} ✅{counts.get('existing', 0)}"
+                        if counts["total"] else "&nbsp;"
+                    )
+                    st.markdown(
+                        f"<div style='height:20px;line-height:20px;text-align:center;"
+                        f"font-size:11px;color:#8BA4BF;white-space:nowrap;'>{badge_html}</div>",
+                        unsafe_allow_html=True,
+                    )
 
     with day_col:
         sel = st.session_state.selected_date
