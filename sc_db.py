@@ -19,7 +19,6 @@ Usage:
     python sc_db.py dari_export.csv --table dari_motion
     python sc_db.py --athlete "Isaac Stebens"        # print session counts
 """
-u = 1
 
 import os
 import re
@@ -35,6 +34,7 @@ import numpy as np
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
 MAX_SESSIONS = 4   # last N sessions pulled for reports
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SCHEMA
@@ -1323,15 +1323,6 @@ def ingest_file(path: str, table: str, verbose: bool = True) -> dict:
         raise ValueError(f"Unknown table: {table}")
 
     conn = get_conn()
-
-    # For InBody: truncate the table before inserting — exports always contain
-    # the full dataset so a reset is cleaner than upsert logic
-    if table == "inbody":
-        trunc_cur = conn.cursor()
-        trunc_cur.execute("TRUNCATE TABLE inbody RESTART IDENTITY")
-        conn.commit()
-        trunc_cur.close()
-        print("  InBody table truncated — loading fresh from export")
 
     # Try to auto-link master_uid
     if table != "master_uid":
