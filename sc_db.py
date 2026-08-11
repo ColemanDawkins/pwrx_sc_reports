@@ -2076,8 +2076,19 @@ def get_athlete_session_history(athlete_name: str, limit_per_source: int = 15) -
     cur.close()
     conn.close()
 
+    # Normalize sort key: some sources store a timestamp (e.g. dari_motion's
+    # session_ts) and others a plain date (e.g. exam_date/test_date). Python
+    # can't compare datetime.datetime to datetime.date directly, so coerce
+    # everything to a datetime before sorting.
+    def _sort_key(d):
+        if isinstance(d, datetime.datetime):
+            return d
+        if isinstance(d, datetime.date):
+            return datetime.datetime.combine(d, datetime.time.min)
+        return pd.to_datetime(d)
+
     # Most recent first
-    sessions.sort(key=lambda s: s["date"], reverse=True)
+    sessions.sort(key=lambda s: _sort_key(s["date"]), reverse=True)
 
     for s in sessions:
         s["date_label"] = _fmt_full_date(s["date"])
