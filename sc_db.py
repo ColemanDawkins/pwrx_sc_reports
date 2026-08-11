@@ -554,6 +554,20 @@ DO $$ BEGIN
     CREATE TRIGGER evaluation_sessions_updated_at BEFORE UPDATE ON evaluation_sessions FOR EACH ROW EXECUTE FUNCTION set_updated_at();
   END IF;
 END $$;
+
+-- ── Standardized full_name column on fact tables ──────────────────────────
+-- Every fact table already carries master_uid, but several only carry an
+-- opaque source ID (e.g. inbody_uid) or an inconsistently-populated name
+-- field. This adds a uniform, always-canonical full_name column (sourced
+-- from master_uid.full_name at ingest time) so rows are readable directly
+-- in Supabase without a join. See backfill_full_names() for populating
+-- full_name on rows that existed before this column was added.
+ALTER TABLE dari_motion      ADD COLUMN IF NOT EXISTS full_name TEXT;
+ALTER TABLE armcare          ADD COLUMN IF NOT EXISTS full_name TEXT;
+ALTER TABLE vald_performance ADD COLUMN IF NOT EXISTS full_name TEXT;
+ALTER TABLE vald_slj         ADD COLUMN IF NOT EXISTS full_name TEXT;
+ALTER TABLE vald_hop         ADD COLUMN IF NOT EXISTS full_name TEXT;
+ALTER TABLE inbody           ADD COLUMN IF NOT EXISTS full_name TEXT;
 """
 
 
@@ -1016,6 +1030,7 @@ TABLE_COLUMNS = {
         "dp157_th_rot_e3", "dp157_lum_rot_e3", "dp158_th_rot_e3", "dp158_lum_rot_e3",
         "dp163_rbalance_lt_xrom", "dp163_rbalance_lt_yrom",
         "dp164_lbalance_lt_xrom", "dp164_lbalance_lt_yrom",
+        "full_name",
     ],
     "armcare": [
         "master_uid", "armcare_id", "exam_date", "first_name", "last_name",
@@ -1051,6 +1066,7 @@ TABLE_COLUMNS = {
         "fresh_arm_feels", "fresh_location", "fresh_warmed_up",
         "post_threw_today", "post_throwing_activity", "post_throwing_time",
         "post_pitch_count", "post_high_intent_throws",
+        "full_name",
     ],
     "vald_performance": [
         "master_uid", "vald_external_id", "athlete_name", "test_type",
@@ -1061,6 +1077,7 @@ TABLE_COLUMNS = {
         "concentric_mean_force_asym", "eccentric_mean_force_asym",
         "jump_height_imp_mom_in", "eccentric_peak_power_per_bm",
         "concentric_peak_force_asym", "bodyweight_lbs",
+        "full_name",
     ],
     "inbody": [
         "master_uid", "inbody_uid", "test_date", "height", "gender", "age",
@@ -1092,6 +1109,7 @@ TABLE_COLUMNS = {
         "mean_artery_pressure2", "pulse_pressure2", "rate_pressure_product2",
         "smm_wt_ratio", "left_handgrip_1", "left_handgrip_2",
         "right_handgrip_1", "right_handgrip_2",
+        "full_name",
     ],
 }
 
@@ -1264,6 +1282,17 @@ def _link_master_uid(df: pd.DataFrame, table: str, conn) -> pd.DataFrame:
     elif table == "inbody" and unlinked > 0:
         # InBody links via phone — allow unlinked rows through, backfill after insert
         print(f"  Pass 2: InBody uses phone matching — {unlinked} rows will be linked after insert")
+
+    # ── Populate the standardized full_name column from the canonical
+    # roster (master_uid.full_name), for every row that got a master_uid —
+    # regardless of which pass linked it. This is deliberately NOT taken
+    # from the source file's own name field, since those vary in shape
+    # (split first/last vs combined) and aren't always populated. Rows
+    # still unlinked (e.g. InBody rows pending phone backfill) are left
+    # NaN here and picked up later by backfill_links(). ────────────────────
+    cur.execute("SELECT master_uid, full_name FROM master_uid")
+    uid_to_name = {row[0]: row[1] for row in cur.fetchall()}
+    df["full_name"] = df["master_uid"].map(uid_to_name)
 
     cur.close()
     return df
@@ -2490,9 +2519,9 @@ def ingest_vald_slj(path: str) -> dict:
     conn = get_conn()
     cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-    # Build name → master_uid lookup
+    # Build name → (master_uid, canonical full_name) lookup
     cur.execute("SELECT master_uid, full_name FROM master_uid")
-    name_map = {r["full_name"].strip().lower(): r["master_uid"] for r in cur.fetchall()}
+    name_map = {r["full_name"].strip().lower(): (r["master_uid"], r["full_name"]) for r in cur.fetchall()}
 
     inserted  = 0
     skipped   = 0
@@ -2503,17 +2532,18 @@ def ingest_vald_slj(path: str) -> dict:
         "reps_l", "reps_r", "peak_force_l", "peak_force_r", "peak_force_asym_pct",
         "jump_height_imp_mom_l", "jump_height_imp_mom_r", "jump_height_imp_mom_asym",
         "jump_height_flight_l", "jump_height_flight_r", "jump_height_flight_asym",
-        "conc_impulse_l", "conc_impulse_r", "conc_impulse_asym",
+        "conc_impulse_l", "conc_impulse_r", "conc_impulse_asym", "full_name",
     ]
 
     for _, row in df.iterrows():
         name = row["athlete_name"].strip()
-        uid  = name_map.get(name.lower())
+        match = name_map.get(name.lower())
 
-        if not uid:
+        if not match:
             unmatched.append(name)
             skipped += 1
             continue
+        uid, canonical_name = match
 
         def val(col):
             v = row.get(col, None)
@@ -2531,6 +2561,7 @@ def ingest_vald_slj(path: str) -> dict:
             val("jump_height_imp_mom_l"), val("jump_height_imp_mom_r"), val("jump_height_imp_mom_asym"),
             val("jump_height_flight_l"), val("jump_height_flight_r"), val("jump_height_flight_asym"),
             val("conc_impulse_l"), val("conc_impulse_r"), val("conc_impulse_asym"),
+            canonical_name,
         ]
 
         try:
@@ -2613,9 +2644,9 @@ def ingest_vald_hop(path: str) -> dict:
     conn = get_conn()
     cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-    # Build name → master_uid lookup
+    # Build name → (master_uid, canonical full_name) lookup
     cur.execute("SELECT master_uid, full_name FROM master_uid")
-    name_map = {r["full_name"].strip().lower(): r["master_uid"] for r in cur.fetchall()}
+    name_map = {r["full_name"].strip().lower(): (r["master_uid"], r["full_name"]) for r in cur.fetchall()}
 
     inserted  = 0
     skipped   = 0
@@ -2625,16 +2656,18 @@ def ingest_vald_hop(path: str) -> dict:
         "master_uid", "athlete_name", "vald_external_id", "test_type",
         "exam_date", "exam_time", "bw_kg", "reps", "tags",
         "mean_rsi", "mean_jump_height_cm", "mean_contact_time_ms", "mean_impulse_asym_pct",
+        "full_name",
     ]
 
     for _, row in df.iterrows():
         name = row["athlete_name"].strip()
-        uid  = name_map.get(name.lower())
+        match = name_map.get(name.lower())
 
-        if not uid:
+        if not match:
             unmatched.append(name)
             skipped += 1
             continue
+        uid, canonical_name = match
 
         def val(col):
             v = row.get(col, None)
@@ -2650,6 +2683,7 @@ def ingest_vald_hop(path: str) -> dict:
             val("bw_kg"), val("reps"), val("tags"),
             val("mean_rsi"), val("mean_jump_height_cm"),
             val("mean_contact_time_ms"), val("mean_impulse_asym_pct"),
+            canonical_name,
         ]
 
         try:
@@ -2965,6 +2999,49 @@ def backfill_links(table: str = None) -> dict:
     conn.commit()
     cur.close()
     conn.close()
+
+    # Any row that just got a master_uid above (or already had one but was
+    # missing full_name) should now also get its canonical full_name.
+    full_name_tables = [t for t in results if t in
+                         ("dari_motion", "armcare", "vald_performance", "inbody")]
+    if full_name_tables:
+        backfill_full_names(full_name_tables)
+
+    return results
+
+
+def backfill_full_names(tables: list = None) -> dict:
+    """
+    One-time (and safely re-runnable) migration: populate the full_name
+    column on any row that already has a master_uid but a NULL/empty
+    full_name, using the canonical name from the master_uid table.
+
+    Only touches rows missing full_name — safe to run repeatedly, and safe
+    to run after every new upload since it's a no-op for rows already
+    populated at ingest time.
+    """
+    conn = get_conn()
+    cur  = conn.cursor()
+    results = {}
+
+    all_tables = ["dari_motion", "armcare", "vald_performance", "vald_slj", "vald_hop", "inbody"]
+    target_tables = tables or all_tables
+
+    for tbl in target_tables:
+        cur.execute(f"""
+            UPDATE {tbl} t
+            SET full_name = m.full_name
+            FROM master_uid m
+            WHERE t.master_uid = m.master_uid
+              AND t.master_uid IS NOT NULL
+              AND (t.full_name IS NULL OR TRIM(t.full_name) = '')
+        """)
+        results[tbl] = cur.rowcount
+        print(f"  {tbl}: backfilled full_name on {cur.rowcount} rows")
+
+    conn.commit()
+    cur.close()
+    conn.close()
     return results
 
 
@@ -3210,12 +3287,22 @@ if __name__ == "__main__":
     parser.add_argument("file",       nargs="?",          help="CSV or XLSX file to ingest")
     parser.add_argument("--table",    default=None,       help="Target table: master_uid | pushpress | dari_motion | armcare | vald_performance")
     parser.add_argument("--init",     action="store_true",help="Create all tables and exit")
+    parser.add_argument("--backfill-names", action="store_true",
+                         help="One-time migration: populate full_name on existing rows in "
+                              "dari_motion, armcare, vald_performance, vald_slj, vald_hop, inbody")
     parser.add_argument("--roster",   action="store_true",help="Print roster summary")
     parser.add_argument("--athlete",  default=None,       help="Print session counts for one athlete")
     args = parser.parse_args()
 
     if args.init:
         init_db()
+        sys.exit(0)
+
+    if args.backfill_names:
+        init_db()  # make sure the full_name columns exist first
+        results = backfill_full_names()
+        total = sum(results.values())
+        print(f"\nDone — {total} rows backfilled across {len(results)} tables.")
         sys.exit(0)
 
     if args.roster:
