@@ -96,6 +96,10 @@ VIEW_DATA_METRICS = [
     ("Vald SLJ",    "Peak Force R",    False, "{:.0f} N"),
     ("Vald SLJ",    "Jump Height L",   False, "{:.2f} in"),
     ("Vald SLJ",    "Jump Height R",   False, "{:.2f} in"),
+    ("Vald Hop",    "RSI",             False, "{:.3f}"),
+    ("Vald Hop",    "Jump Height",     False, "{:.1f} cm"),
+    ("Vald Hop",    "Contact Time",    True,  "{:.0f} ms"),
+    ("Vald Hop",    "Impulse Asym",    True,  "{:.1f}%"),
     ("ArmCare",     "Arm Score",       False, "{:.1f}"),
     ("ArmCare",     "Total Strength",  False, "{:.1f} lbs"),
     ("ArmCare",     "SVR",             False, "{:.2f}"),
@@ -113,6 +117,7 @@ VIEW_DATA_SOURCE_COLORS = {
     "Vald CMJ":   "#FF7A00",
     "Vald ABCMJ": "#FFB347",
     "Vald SLJ":   "#C2410C",
+    "Vald Hop":   "#F59E0B",
     "ArmCare":    "#EF4444",
     "InBody":     "#2563EB",
 }
@@ -553,6 +558,34 @@ with tab3:
                     resp = requests.post(
                         API_URL + "/ingest_vald_slj",
                         files={"file": (slj_file.name, slj_file.getvalue(), "text/csv")},
+                        timeout=120
+                    )
+                    if resp.status_code == 200:
+                        r = resp.json()
+                        st.success(f"Done! {r['inserted']} rows inserted, {r['skipped']} skipped.")
+                        if r.get("unmatched"):
+                            with st.expander(f"{len(r['unmatched'])} athletes not matched to roster"):
+                                for name in sorted(r["unmatched"]):
+                                    st.write(f"• {name}")
+                    else:
+                        st.error("Error: " + resp.text)
+                except Exception as exc:
+                    st.error("Connection error: " + str(exc))
+
+    st.divider()
+    st.markdown("#### Upload Hop Test CSV")
+    st.caption("Upload the Hop Test (HJ) CSV exported from VALD Force Decks. "
+               "Athletes are matched by name. Duplicate (athlete + date + time) rows are skipped automatically.")
+
+    hop_file = st.file_uploader("Select Hop Test CSV", type=["csv"], key="vald_hop_upload")
+    if hop_file:
+        st.success(f"File loaded: {hop_file.name}")
+        if st.button("Ingest Hop Test Data", type="primary"):
+            with st.spinner("Ingesting... please wait"):
+                try:
+                    resp = requests.post(
+                        API_URL + "/ingest_vald_hop",
+                        files={"file": (hop_file.name, hop_file.getvalue(), "text/csv")},
                         timeout=120
                     )
                     if resp.status_code == 200:

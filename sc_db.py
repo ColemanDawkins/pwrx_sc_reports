@@ -315,6 +315,33 @@ DO $$ BEGIN
   END IF;
 END $$;
 
+CREATE TABLE IF NOT EXISTS vald_hop (
+    id                   SERIAL PRIMARY KEY,
+    master_uid           TEXT REFERENCES master_uid(master_uid) ON DELETE SET NULL,
+    athlete_name         TEXT,
+    vald_external_id     TEXT,
+    test_type            TEXT,
+    exam_date            DATE,
+    exam_time            TEXT,
+    bw_kg                NUMERIC,
+    reps                 INTEGER,
+    tags                 TEXT,
+    mean_rsi             NUMERIC,
+    mean_jump_height_cm  NUMERIC,
+    mean_contact_time_ms NUMERIC,
+    mean_impulse_asym_pct TEXT,
+    uploaded_at          TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_vald_hop_master ON vald_hop(master_uid);
+CREATE INDEX IF NOT EXISTS idx_vald_hop_date   ON vald_hop(exam_date);
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'vald_hop_unique_session') THEN
+    ALTER TABLE vald_hop ADD CONSTRAINT vald_hop_unique_session UNIQUE (master_uid, exam_date, exam_time);
+  END IF;
+END $$;
+
 CREATE TABLE IF NOT EXISTS sprints (
     id                SERIAL PRIMARY KEY,
     master_uid        TEXT REFERENCES master_uid(master_uid) ON DELETE SET NULL,
@@ -2073,6 +2100,28 @@ def get_athlete_session_history(athlete_name: str, limit_per_source: int = 15) -
         for r in cur.fetchall()
     ]
 
+    # ── Vald Hop Test (HJ — separate table) ──────────────────────────────────
+    cur.execute("""
+        SELECT exam_date, exam_time, mean_rsi, mean_jump_height_cm,
+               mean_contact_time_ms, mean_impulse_asym_pct
+        FROM vald_hop
+        WHERE master_uid = %s AND exam_date IS NOT NULL
+        ORDER BY exam_date DESC, exam_time DESC LIMIT %s
+    """, (uid, limit_per_source))
+    hop_list = [
+        _row(r["exam_date"], {
+            "RSI":          round(_safe_float(r["mean_rsi"]), 3)
+                            if r.get("mean_rsi") is not None else None,
+            "Jump Height":  round(_safe_float(r["mean_jump_height_cm"]), 1)
+                            if r.get("mean_jump_height_cm") is not None else None,
+            "Contact Time": round(_safe_float(r["mean_contact_time_ms"]), 0)
+                            if r.get("mean_contact_time_ms") is not None else None,
+            "Impulse Asym": round(_safe_float(r["mean_impulse_asym_pct"]), 1)
+                            if r.get("mean_impulse_asym_pct") is not None else None,
+        })
+        for r in cur.fetchall()
+    ]
+
     # ── ArmCare ───────────────────────────────────────────────────────────
     cur.execute("""
         SELECT exam_date, arm_score, total_strength, shoulder_balance, svr
@@ -2123,6 +2172,7 @@ def get_athlete_session_history(athlete_name: str, limit_per_source: int = 15) -
             "Vald CMJ":     cmj_list,
             "Vald ABCMJ":   abcmj_list,
             "Vald SLJ":     slj_list,
+            "Vald Hop":     hop_list,
             "ArmCare":      armcare_list,
             "InBody":       inbody_list,
         },
@@ -2486,6 +2536,125 @@ def ingest_vald_slj(path: str) -> dict:
         try:
             cur.execute(f"""
                 INSERT INTO vald_slj ({', '.join(db_cols)})
+                VALUES ({', '.join(['%s'] * len(db_cols))})
+                ON CONFLICT (master_uid, exam_date, exam_time) DO NOTHING
+            """, values)
+
+            if cur.rowcount == 0:
+                skipped += 1
+            else:
+                inserted += 1
+
+        except Exception as e:
+            print(f"  Row skipped ({name} / {row['exam_date']}): {e}")
+            conn.rollback()
+            skipped += 1
+            continue
+
+        conn.commit()
+
+    cur.close()
+    conn.close()
+
+    return {
+        "inserted":  inserted,
+        "skipped":   skipped,
+        "unmatched": list(set(unmatched)),
+    }
+
+
+def ingest_vald_hop(path: str) -> dict:
+    """
+    Ingest a Hop Test CSV exported from VALD Force Decks (test type "HJ").
+
+    Expected columns (from VALD export):
+        Name, ExternalId, Test Type, Date, Time, BW [KG], Reps, Tags,
+        Mean RSI (Jump Height/Contact Time) [m/s], Mean Jump Height
+        (Flight Time) [cm], Mean Contact Time [ms], Mean Impulse % (Asym) (%)
+
+    - Only keeps rows where Test Type == "HJ" (in case the export contains
+      other test types mixed in)
+    - Matches athletes by full name against master_uid
+    - Skips duplicate (master_uid, exam_date, exam_time) rows
+    - Returns inserted / skipped / unmatched counts
+    """
+    import pandas as pd
+
+    df = pd.read_csv(path, dtype=str)
+    df.columns = [c.strip() for c in df.columns]
+
+    # Column mapping: CSV header → internal name
+    col_map = {
+        "Name":                                                "athlete_name",
+        "ExternalId":                                           "vald_external_id",
+        "Test Type":                                             "test_type",
+        "Date":                                                  "exam_date",
+        "Time":                                                  "exam_time",
+        "BW [KG]":                                                "bw_kg",
+        "Reps":                                                   "reps",
+        "Tags":                                                   "tags",
+        "Mean RSI (Jump Height/Contact Time) [m/s]":              "mean_rsi",
+        "Mean Jump Height (Flight Time) [cm]":                    "mean_jump_height_cm",
+        "Mean Contact Time [ms]":                                 "mean_contact_time_ms",
+        "Mean Impulse % (Asym) (%)":                              "mean_impulse_asym_pct",
+    }
+
+    df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
+
+    # Guard against a mixed export — only keep HJ rows if Test Type is present
+    if "test_type" in df.columns:
+        df = df[df["test_type"].str.strip().str.upper() == "HJ"]
+
+    df = df.dropna(subset=["athlete_name", "exam_date"])
+    df["athlete_name"] = df["athlete_name"].str.strip()
+    df["exam_date"]    = pd.to_datetime(df["exam_date"], errors="coerce").dt.date
+    df = df.dropna(subset=["exam_date"])
+
+    conn = get_conn()
+    cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    # Build name → master_uid lookup
+    cur.execute("SELECT master_uid, full_name FROM master_uid")
+    name_map = {r["full_name"].strip().lower(): r["master_uid"] for r in cur.fetchall()}
+
+    inserted  = 0
+    skipped   = 0
+    unmatched = []
+
+    db_cols = [
+        "master_uid", "athlete_name", "vald_external_id", "test_type",
+        "exam_date", "exam_time", "bw_kg", "reps", "tags",
+        "mean_rsi", "mean_jump_height_cm", "mean_contact_time_ms", "mean_impulse_asym_pct",
+    ]
+
+    for _, row in df.iterrows():
+        name = row["athlete_name"].strip()
+        uid  = name_map.get(name.lower())
+
+        if not uid:
+            unmatched.append(name)
+            skipped += 1
+            continue
+
+        def val(col):
+            v = row.get(col, None)
+            if v is None or str(v).strip() in ("", "nan"):
+                return None
+            return str(v).strip()
+
+        values = [
+            uid, name,
+            val("vald_external_id"), val("test_type"),
+            row["exam_date"],
+            val("exam_time"),
+            val("bw_kg"), val("reps"), val("tags"),
+            val("mean_rsi"), val("mean_jump_height_cm"),
+            val("mean_contact_time_ms"), val("mean_impulse_asym_pct"),
+        ]
+
+        try:
+            cur.execute(f"""
+                INSERT INTO vald_hop ({', '.join(db_cols)})
                 VALUES ({', '.join(['%s'] * len(db_cols))})
                 ON CONFLICT (master_uid, exam_date, exam_time) DO NOTHING
             """, values)
