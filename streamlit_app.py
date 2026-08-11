@@ -73,6 +73,164 @@ def _sched_reset_booking_flow():
     st.session_state.confirm_phone_edit = False
 
 
+# ── "View Data" — combined session history table ──────────────────────────────
+# NOTE: this metric list mirrors sc_db.SESSION_HISTORY_METRICS. If the set of
+# metrics pulled for the report ever changes, update both places together.
+#   (source, metric label, invert, format string)
+#   invert=True means lower is better — arrow flips (down = green, up = red).
+#   This currently applies to Dari Dysfunction and InBody Body Fat %, matching
+#   the invert=True calls in generate_sc_report.py's chip()/build_decline_flags().
+VIEW_DATA_METRICS = [
+    ("Dari",    "Overall Score",   False, "{:.1f}"),
+    ("Dari",    "Athleticism",     False, "{:.1f}"),
+    ("Dari",    "Functionality",   False, "{:.1f}"),
+    ("Dari",    "Explosiveness",   False, "{:.1f}"),
+    ("Dari",    "Dysfunction",     True,  "{:.1f}"),
+    ("Vald",    "Jump Height",     False, "{:.2f} in"),
+    ("Vald",    "Peak Power",      False, "{:,.0f} W"),
+    ("Vald",    "RSI-Modified",    False, "{:.3f}"),
+    ("ArmCare", "Arm Score",       False, "{:.1f}"),
+    ("ArmCare", "Total Strength",  False, "{:.1f} lbs"),
+    ("ArmCare", "SVR",             False, "{:.2f}"),
+    ("ArmCare", "Balance",         False, "{:.2f}"),
+    ("InBody",  "InBody Score",    False, "{:.0f}"),
+    ("InBody",  "Weight",          False, "{:.1f} lbs"),
+    ("InBody",  "Body Fat %",      True,  "{:.1f}%"),
+    ("InBody",  "SMM",             False, "{:.1f} lbs"),
+    ("InBody",  "BMR",             False, "{:.0f} kcal"),
+    ("InBody",  "Phase Angle",     False, "{:.1f}"),
+]
+
+VIEW_DATA_SOURCE_COLORS = {
+    "Dari":    "#38A3A5",
+    "Vald":    "#FF7A00",
+    "ArmCare": "#EF4444",
+    "InBody":  "#2563EB",
+}
+
+
+def _view_data_chip(current, previous, invert=False):
+    """Small colored arrow badge, same visual language as the PDF report's chip()."""
+    if previous is None or current is None:
+        return ""
+    try:
+        current, previous = float(current), float(previous)
+    except (TypeError, ValueError):
+        return ""
+    if previous == 0:
+        return ""
+    pct = round((current - previous) / previous * 100, 1)
+    if pct == 0:
+        return ""
+    good  = (pct < 0) if invert else (pct >= 0)
+    color = "#22c55e" if good else "#ef4444"
+    bg    = "rgba(34,197,94,0.18)" if good else "rgba(239,68,68,0.15)"
+    arrow = "▲" if pct >= 0 else "▼"
+    return (f'<span style="background:{bg};color:{color};font-size:9px;font-weight:700;'
+            f'padding:1px 5px;border-radius:9px;margin-left:5px;white-space:nowrap;">'
+            f'{arrow} {abs(pct):.1f}%</span>')
+
+
+def _render_view_data_table(athlete_name: str, uid: str):
+    """Fetch and render the combined cross-source session history table."""
+    try:
+        resp = requests.get(
+            API_URL + "/athletes/session_history",
+            params={"athlete": athlete_name, "limit": 15},
+            timeout=15,
+        )
+        payload = resp.json() if resp.status_code == 200 else None
+    except Exception as e:
+        st.error(f"Request failed: {e}")
+        return
+
+    if not payload:
+        st.error("Could not load session data for this athlete.")
+        return
+
+    sessions = payload.get("sessions", [])
+    if not sessions:
+        st.info("No session data found for this athlete yet.")
+        return
+
+    # ── Compute arrow chips: compare each metric to that metric's own most
+    # recent PRIOR appearance (i.e. the previous session from the same
+    # source), walking oldest → newest so "previous" is well defined. ──────
+    chronological = list(reversed(sessions))  # oldest first; same dict refs as `sessions`
+    last_val = {}
+    for row in chronological:
+        chips = {}
+        for metric, cur_val in row["metrics"].items():
+            key = (row["source"], metric)
+            invert = next((m[2] for m in VIEW_DATA_METRICS
+                            if m[0] == row["source"] and m[1] == metric), False)
+            chips[metric] = _view_data_chip(cur_val, last_val.get(key), invert)
+            last_val[key] = cur_val
+        row["_chips"] = chips
+
+    # ── Build grouped header (source spans) + sub-header (metric names) ────
+    sources_in_order = []
+    for src, _, _, _ in VIEW_DATA_METRICS:
+        if src not in sources_in_order:
+            sources_in_order.append(src)
+
+    group_header_cells = ['<th rowspan="2" style="min-width:110px;">Date</th>',
+                           '<th rowspan="2" style="min-width:90px;">Source</th>']
+    for src in sources_in_order:
+        span = sum(1 for m in VIEW_DATA_METRICS if m[0] == src)
+        color = VIEW_DATA_SOURCE_COLORS[src]
+        group_header_cells.append(
+            f'<th colspan="{span}" style="background:{color}22;color:{color};'
+            f'border-bottom:2px solid {color};">{src}</th>'
+        )
+    metric_header_cells = "".join(
+        f'<th style="font-weight:500;color:#5A7A9A;white-space:nowrap;">{label}</th>'
+        for _, label, _, _ in VIEW_DATA_METRICS
+    )
+
+    # ── Build rows ───────────────────────────────────────────────────────
+    row_html = []
+    for row in sessions:
+        cells = [f'<td style="white-space:nowrap;">{row["date_label"]}</td>']
+        color = VIEW_DATA_SOURCE_COLORS.get(row["source"], "#888")
+        cells.append(
+            f'<td><span style="background:{color}22;color:{color};padding:2px 8px;'
+            f'border-radius:5px;font-size:11px;font-weight:600;">{row["source"]}</span></td>'
+        )
+        for src, label, invert, fmt in VIEW_DATA_METRICS:
+            if src != row["source"] or label not in row["metrics"]:
+                cells.append('<td style="color:#3a4a5c;text-align:center;">—</td>')
+                continue
+            val = row["metrics"][label]
+            try:
+                val_str = fmt.format(val)
+            except Exception:
+                val_str = str(val)
+            chip = row.get("_chips", {}).get(label, "")
+            cells.append(f'<td style="white-space:nowrap;">{val_str}{chip}</td>')
+        row_html.append(f"<tr>{''.join(cells)}</tr>")
+
+    table_html = f"""
+    <div style="overflow-x:auto;border:1px solid rgba(255,255,255,0.08);border-radius:8px;">
+    <table style="border-collapse:collapse;width:100%;font-size:12.5px;font-family:sans-serif;">
+      <thead>
+        <tr>{''.join(group_header_cells)}</tr>
+        <tr>{metric_header_cells}</tr>
+      </thead>
+      <tbody>
+        {''.join(row_html)}
+      </tbody>
+    </table>
+    </div>
+    <p style="font-size:11px;color:#5A7A9A;margin-top:6px;">
+      Each row is one real session from one data source (sessions across sources don't share dates).
+      Arrows compare a metric to that same metric's previous session from the same source.
+      Green = improvement, red = regression. "—" means no data from that source on this session.
+    </p>
+    """
+    st.markdown(table_html, unsafe_allow_html=True)
+
+
 # ── TAB 1: Generate Report ────────────────────────────────────────────────────
 with tab1:
     st.markdown("### Generate Athlete Report")
@@ -596,6 +754,20 @@ with tab4:
                     c1.markdown(f"**PushPress ID:** `{athlete.get('pushpress_id') or '—'}`")
                     c2.markdown(f"**InBody / Phone:** `{athlete.get('inbody_uid') or '—'}`")
                     c3.markdown(f"**PP Phone on file:** `{athlete.get('pushpress_phone') or '—'}`")
+
+                    # ── View Data: combined cross-source session history ────
+                    view_key = f"view_data_open_{uid}"
+                    if view_key not in st.session_state:
+                        st.session_state[view_key] = False
+
+                    if st.button(
+                        "🔽 Hide Data" if st.session_state[view_key] else "📊 View Data",
+                        key=f"viewdata_btn_{uid}",
+                    ):
+                        st.session_state[view_key] = not st.session_state[view_key]
+
+                    if st.session_state[view_key]:
+                        _render_view_data_table(athlete["full_name"], uid)
 
                     st.divider()
                     st.markdown("##### Edit IDs")

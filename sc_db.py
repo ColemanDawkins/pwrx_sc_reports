@@ -1922,6 +1922,175 @@ def load_athlete_data(athlete_name: str) -> dict:
 # PHONE SYNC
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# COMBINED SESSION HISTORY  (for the "View Data" screen)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Metrics pulled per source for the View Data table, in display order.
+# Mirrors the exact numbers used in generate_sc_report.py (build_summary_kpis /
+# build_decline_flags / the report's num-card sections), so this view always
+# matches what shows up on the PDF/HTML report.
+#   (source, metric label, invert, format string)
+#   invert=True means lower is better (arrow flips: down = green, up = red)
+SESSION_HISTORY_METRICS = [
+    ("Dari",    "Overall Score",   False, "{:.1f}"),
+    ("Dari",    "Athleticism",     False, "{:.1f}"),
+    ("Dari",    "Functionality",   False, "{:.1f}"),
+    ("Dari",    "Explosiveness",   False, "{:.1f}"),
+    ("Dari",    "Dysfunction",     True,  "{:.1f}"),
+    ("Vald",    "Jump Height",     False, "{:.2f} in"),
+    ("Vald",    "Peak Power",      False, "{:,.0f} W"),
+    ("Vald",    "RSI-Modified",    False, "{:.3f}"),
+    ("ArmCare", "Arm Score",       False, "{:.1f}"),
+    ("ArmCare", "Total Strength",  False, "{:.1f} lbs"),
+    ("ArmCare", "SVR",             False, "{:.2f}"),
+    ("ArmCare", "Balance",         False, "{:.2f}"),
+    ("InBody",  "InBody Score",    False, "{:.0f}"),
+    ("InBody",  "Weight",          False, "{:.1f} lbs"),
+    ("InBody",  "Body Fat %",      True,  "{:.1f}%"),
+    ("InBody",  "SMM",             False, "{:.1f} lbs"),
+    ("InBody",  "BMR",             False, "{:.0f} kcal"),
+    ("InBody",  "Phase Angle",     False, "{:.1f}"),
+]
+
+
+def get_athlete_session_history(athlete_name: str, limit_per_source: int = 15) -> dict:
+    """
+    Return every individual session for an athlete across all data sources as
+    one flat, chronologically-sorted (most-recent-first) list — one row per
+    real session/test event, tagged with its source. Unlike load_athlete_data()
+    (which is capped to MAX_SESSIONS and shapes data for the PDF report), this
+    pulls more history and keeps each source's session as its own row, since
+    session dates don't line up across sources.
+
+    Powers the "View Data" screen in the Athletes tab.
+    """
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    cur.execute("""
+        SELECT master_uid, full_name
+        FROM master_uid
+        WHERE full_name ILIKE %s
+           OR (first_name || ' ' || last_name) ILIKE %s
+        LIMIT 1
+    """, (f"%{athlete_name}%", f"%{athlete_name}%"))
+    athlete = cur.fetchone()
+    if not athlete:
+        cur.close()
+        conn.close()
+        raise ValueError(f"Athlete not found: {athlete_name}")
+    uid = athlete["master_uid"]
+
+    sessions = []
+
+    # ── Dari ──────────────────────────────────────────────────────────────
+    cur.execute("""
+        SELECT session_ts, score_overall, score_function, score_explosive,
+               score_dysfunction, score_vulnerability
+        FROM dari_motion
+        WHERE master_uid = %s
+          AND session_ts IS NOT NULL
+          AND score_overall IS NOT NULL
+        ORDER BY session_ts DESC LIMIT %s
+    """, (uid, limit_per_source))
+    for r in cur.fetchall():
+        sessions.append({
+            "date":   r["session_ts"],
+            "source": "Dari",
+            "metrics": {
+                "Overall Score":  _safe_float(r["score_overall"]),
+                "Athleticism":    _safe_float(r["score_vulnerability"]),
+                "Functionality":  _safe_float(r["score_function"]),
+                "Explosiveness":  _safe_float(r["score_explosive"]),
+                "Dysfunction":    _safe_float(r["score_dysfunction"]),
+            },
+        })
+
+    # ── Vald (CMJ — same test type used in the report) ──────────────────────
+    cur.execute("""
+        SELECT test_date, jump_height_flight_in, peak_power_w, rsi_modified
+        FROM vald_performance
+        WHERE master_uid = %s
+          AND test_type = 'CMJ'
+          AND test_date IS NOT NULL
+          AND jump_height_flight_in IS NOT NULL
+          AND peak_power_w IS NOT NULL
+        ORDER BY test_date DESC LIMIT %s
+    """, (uid, limit_per_source))
+    for r in cur.fetchall():
+        sessions.append({
+            "date":   r["test_date"],
+            "source": "Vald",
+            "metrics": {
+                "Jump Height":  round(_safe_float(r["jump_height_flight_in"]), 2),
+                "Peak Power":   round(_safe_float(r["peak_power_w"]), 0),
+                "RSI-Modified": round(_safe_float(r["rsi_modified"]), 3),
+            },
+        })
+
+    # ── ArmCare ───────────────────────────────────────────────────────────
+    cur.execute("""
+        SELECT exam_date, arm_score, total_strength, shoulder_balance, svr
+        FROM armcare
+        WHERE master_uid = %s
+          AND exam_date IS NOT NULL
+          AND arm_score IS NOT NULL
+          AND total_strength IS NOT NULL
+        ORDER BY exam_date DESC LIMIT %s
+    """, (uid, limit_per_source))
+    for r in cur.fetchall():
+        sessions.append({
+            "date":   r["exam_date"],
+            "source": "ArmCare",
+            "metrics": {
+                "Arm Score":      round(_safe_float(r["arm_score"]), 1),
+                "Total Strength": round(_safe_float(r["total_strength"]), 1),
+                "SVR":            round(_safe_float(r["svr"]), 2),
+                "Balance":        round(_safe_float(r["shoulder_balance"]), 2),
+            },
+        })
+
+    # ── InBody ────────────────────────────────────────────────────────────
+    cur.execute("""
+        SELECT test_date, inbody_score, weight, pbf, smm, bmr, phase_angle_50khz
+        FROM inbody
+        WHERE master_uid = %s AND test_date IS NOT NULL
+        ORDER BY test_date DESC LIMIT %s
+    """, (uid, limit_per_source))
+    for r in cur.fetchall():
+        sessions.append({
+            "date":   r["test_date"],
+            "source": "InBody",
+            "metrics": {
+                "InBody Score": _safe_float(r["inbody_score"]),
+                "Weight":       round(_safe_float(r["weight"]), 1),
+                "Body Fat %":   round(_safe_float(r["pbf"]), 1),
+                "SMM":          round(_safe_float(r["smm"]), 1),
+                "BMR":          round(_safe_float(r["bmr"]), 0),
+                "Phase Angle":  round(_safe_float(r["phase_angle_50khz"]), 1),
+            },
+        })
+
+    cur.close()
+    conn.close()
+
+    # Most recent first
+    sessions.sort(key=lambda s: s["date"], reverse=True)
+
+    for s in sessions:
+        s["date_label"] = _fmt_full_date(s["date"])
+        s["date_iso"]   = str(s["date"])
+        del s["date"]  # not JSON-serializable as-is; iso/label cover display needs
+
+    return {
+        "athlete_name": athlete["full_name"],
+        "master_uid":   uid,
+        "sessions":     sessions,
+    }
+
+
 def sync_inbody_phones(records: list[dict]) -> dict:
     """Reconcile {name, phone} records against pushpress."""
     import re

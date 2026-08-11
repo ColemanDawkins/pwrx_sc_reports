@@ -7,6 +7,7 @@ Endpoints:
     GET  /health
     GET  /roster
     GET  /athlete_sessions?athlete=name
+    GET  /athletes/session_history?athlete=name
     GET  /athletes/search?q=name
     POST /athletes/create
     POST /athletes/create_from_import
@@ -120,6 +121,26 @@ def athlete_sessions(athlete: str):
             "master_uid":    data["master_uid"],
             "data_coverage": data["data_coverage"],
         }
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=404)
+    except Exception as exc:
+        traceback.print_exc()
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.get("/athletes/session_history")
+def athlete_session_history(athlete: str, limit: int = 15):
+    """
+    Return every individual session for an athlete across all data sources,
+    combined into one most-recent-first list (one row per source per session).
+    Powers the "View Data" screen in the Athletes tab.
+    """
+    try:
+        from sc_db import get_athlete_session_history
+        data = get_athlete_session_history(athlete, limit_per_source=limit)
+        return data
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=404)
     except Exception as exc:
