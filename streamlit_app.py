@@ -139,9 +139,25 @@ def _render_view_data_table(athlete_name: str, uid: str):
             params={"athlete": athlete_name, "limit": 15},
             timeout=15,
         )
-        payload = resp.json() if resp.status_code == 200 else None
     except Exception as e:
         st.error(f"Request failed: {e}")
+        return
+
+    if resp.status_code != 200:
+        # Surface the real reason instead of a generic message — this is almost
+        # always a 404 (endpoint not deployed yet, or athlete name mismatch)
+        # or a 500 (server-side error) rather than a network failure.
+        try:
+            detail = resp.json().get("error", resp.text)
+        except Exception:
+            detail = resp.text
+        st.error(f"Could not load session data (HTTP {resp.status_code}): {detail}")
+        return
+
+    try:
+        payload = resp.json()
+    except Exception as e:
+        st.error(f"Server returned an unreadable response: {e}")
         return
 
     if not payload:
