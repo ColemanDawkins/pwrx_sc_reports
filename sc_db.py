@@ -2076,16 +2076,20 @@ def get_athlete_session_history(athlete_name: str, limit_per_source: int = 15) -
     cur.close()
     conn.close()
 
-    # Normalize sort key: some sources store a timestamp (e.g. dari_motion's
-    # session_ts) and others a plain date (e.g. exam_date/test_date). Python
-    # can't compare datetime.datetime to datetime.date directly, so coerce
-    # everything to a datetime before sorting.
+    # Normalize sort key: some sources store a plain date (exam_date/test_date)
+    # and others a timestamp (dari_motion.session_ts appears to be stored as
+    # timestamptz in Postgres, so psycopg2 returns it timezone-aware). Python
+    # can't compare datetime.datetime to datetime.date, nor compare
+    # timezone-aware to timezone-naive datetimes — so coerce everything to a
+    # naive datetime before sorting.
     def _sort_key(d):
-        if isinstance(d, datetime.datetime):
-            return d
-        if isinstance(d, datetime.date):
-            return datetime.datetime.combine(d, datetime.time.min)
-        return pd.to_datetime(d)
+        if isinstance(d, datetime.date) and not isinstance(d, datetime.datetime):
+            d = datetime.datetime.combine(d, datetime.time.min)
+        elif not isinstance(d, datetime.datetime):
+            d = pd.to_datetime(d)
+        if isinstance(d, datetime.datetime) and d.tzinfo is not None:
+            d = d.replace(tzinfo=None)
+        return d
 
     # Most recent first
     sessions.sort(key=lambda s: _sort_key(s["date"]), reverse=True)
