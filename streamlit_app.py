@@ -81,31 +81,40 @@ def _sched_reset_booking_flow():
 #   This currently applies to Dari Dysfunction and InBody Body Fat %, matching
 #   the invert=True calls in generate_sc_report.py's chip()/build_decline_flags().
 VIEW_DATA_METRICS = [
-    ("Dari",    "Overall Score",   False, "{:.1f}"),
-    ("Dari",    "Athleticism",     False, "{:.1f}"),
-    ("Dari",    "Functionality",   False, "{:.1f}"),
-    ("Dari",    "Explosiveness",   False, "{:.1f}"),
-    ("Dari",    "Dysfunction",     True,  "{:.1f}"),
-    ("Vald",    "Jump Height",     False, "{:.2f} in"),
-    ("Vald",    "Peak Power",      False, "{:,.0f} W"),
-    ("Vald",    "RSI-Modified",    False, "{:.3f}"),
-    ("ArmCare", "Arm Score",       False, "{:.1f}"),
-    ("ArmCare", "Total Strength",  False, "{:.1f} lbs"),
-    ("ArmCare", "SVR",             False, "{:.2f}"),
-    ("ArmCare", "Balance",         False, "{:.2f}"),
-    ("InBody",  "InBody Score",    False, "{:.0f}"),
-    ("InBody",  "Weight",          False, "{:.1f} lbs"),
-    ("InBody",  "Body Fat %",      True,  "{:.1f}%"),
-    ("InBody",  "SMM",             False, "{:.1f} lbs"),
-    ("InBody",  "BMR",             False, "{:.0f} kcal"),
-    ("InBody",  "Phase Angle",     False, "{:.1f}"),
+    ("Dari",        "Overall Score",   False, "{:.1f}"),
+    ("Dari",        "Athleticism",     False, "{:.1f}"),
+    ("Dari",        "Functionality",   False, "{:.1f}"),
+    ("Dari",        "Explosiveness",   False, "{:.1f}"),
+    ("Dari",        "Dysfunction",     True,  "{:.1f}"),
+    ("Vald CMJ",    "Jump Height",     False, "{:.2f} in"),
+    ("Vald CMJ",    "Peak Power",      False, "{:,.0f} W"),
+    ("Vald CMJ",    "RSI-Modified",    False, "{:.3f}"),
+    ("Vald ABCMJ",  "Jump Height",     False, "{:.2f} in"),
+    ("Vald ABCMJ",  "Peak Power",      False, "{:,.0f} W"),
+    ("Vald ABCMJ",  "RSI-Modified",    False, "{:.3f}"),
+    ("Vald SLJ",    "Peak Force L",    False, "{:.0f} N"),
+    ("Vald SLJ",    "Peak Force R",    False, "{:.0f} N"),
+    ("Vald SLJ",    "Jump Height L",   False, "{:.2f} in"),
+    ("Vald SLJ",    "Jump Height R",   False, "{:.2f} in"),
+    ("ArmCare",     "Arm Score",       False, "{:.1f}"),
+    ("ArmCare",     "Total Strength",  False, "{:.1f} lbs"),
+    ("ArmCare",     "SVR",             False, "{:.2f}"),
+    ("ArmCare",     "Balance",         False, "{:.2f}"),
+    ("InBody",      "InBody Score",    False, "{:.0f}"),
+    ("InBody",      "Weight",          False, "{:.1f} lbs"),
+    ("InBody",      "Body Fat %",      True,  "{:.1f}%"),
+    ("InBody",      "SMM",             False, "{:.1f} lbs"),
+    ("InBody",      "BMR",             False, "{:.0f} kcal"),
+    ("InBody",      "Phase Angle",     False, "{:.1f}"),
 ]
 
 VIEW_DATA_SOURCE_COLORS = {
-    "Dari":    "#38A3A5",
-    "Vald":    "#FF7A00",
-    "ArmCare": "#EF4444",
-    "InBody":  "#2563EB",
+    "Dari":       "#38A3A5",
+    "Vald CMJ":   "#FF7A00",
+    "Vald ABCMJ": "#FFB347",
+    "Vald SLJ":   "#C2410C",
+    "ArmCare":    "#EF4444",
+    "InBody":     "#2563EB",
 }
 
 
@@ -164,66 +173,81 @@ def _render_view_data_table(athlete_name: str, uid: str):
         st.error("Could not load session data for this athlete.")
         return
 
-    sessions = payload.get("sessions", [])
-    if not sessions:
-        st.info("No session data found for this athlete yet.")
-        return
-
-    # ── Compute arrow chips: compare each metric to that metric's own most
-    # recent PRIOR appearance (i.e. the previous session from the same
-    # source), walking oldest → newest so "previous" is well defined. ──────
-    chronological = list(reversed(sessions))  # oldest first; same dict refs as `sessions`
-    last_val = {}
-    for row in chronological:
-        chips = {}
-        for metric, cur_val in row["metrics"].items():
-            key = (row["source"], metric)
-            invert = next((m[2] for m in VIEW_DATA_METRICS
-                            if m[0] == row["source"] and m[1] == metric), False)
-            chips[metric] = _view_data_chip(cur_val, last_val.get(key), invert)
-            last_val[key] = cur_val
-        row["_chips"] = chips
-
-    # ── Build grouped header (source spans) + sub-header (metric names) ────
+    by_source = payload.get("by_source", {})
     sources_in_order = []
     for src, _, _, _ in VIEW_DATA_METRICS:
         if src not in sources_in_order:
             sources_in_order.append(src)
 
-    group_header_cells = ['<th rowspan="2" style="min-width:110px;">Date</th>',
-                           '<th rowspan="2" style="min-width:90px;">Source</th>']
+    max_rows = max((len(by_source.get(src, [])) for src in sources_in_order), default=0)
+    if max_rows == 0:
+        st.info("No session data found for this athlete yet.")
+        return
+
+    # ── Arrow chips: each source's list is already most-recent-first, so
+    # "previous session" for row i is simply row i+1 in that same source's
+    # list — no cross-source date comparison needed. ───────────────────────
     for src in sources_in_order:
-        span = sum(1 for m in VIEW_DATA_METRICS if m[0] == src)
+        rows = by_source.get(src, [])
+        for i, row in enumerate(rows):
+            chips = {}
+            prev_row = rows[i + 1] if i + 1 < len(rows) else None
+            for metric, cur_val in row["metrics"].items():
+                invert = next((m[2] for m in VIEW_DATA_METRICS
+                                if m[0] == src and m[1] == metric), False)
+                prev_val = prev_row["metrics"].get(metric) if prev_row else None
+                chips[metric] = _view_data_chip(cur_val, prev_val, invert)
+            row["_chips"] = chips
+
+    # ── Header: "#" + per-source group spanning [Date, metric1, metric2, ...] ─
+    group_header_cells = ['<th rowspan="2" style="min-width:36px;">#</th>']
+    sub_header_cells = []
+    for src in sources_in_order:
+        metrics = [m for m in VIEW_DATA_METRICS if m[0] == src]
+        span = 1 + len(metrics)  # +1 for that source's own Date column
         color = VIEW_DATA_SOURCE_COLORS[src]
         group_header_cells.append(
             f'<th colspan="{span}" style="background:{color}22;color:{color};'
-            f'border-bottom:2px solid {color};">{src}</th>'
+            f'border-bottom:2px solid {color};border-left:2px solid {color};">{src}</th>'
         )
-    metric_header_cells = "".join(
-        f'<th style="font-weight:500;color:#5A7A9A;white-space:nowrap;">{label}</th>'
-        for _, label, _, _ in VIEW_DATA_METRICS
-    )
+        sub_header_cells.append(
+            f'<th style="font-weight:500;color:#5A7A9A;white-space:nowrap;'
+            f'border-left:2px solid {color};">Date</th>'
+        )
+        for _, label, _, _ in metrics:
+            sub_header_cells.append(
+                f'<th style="font-weight:500;color:#5A7A9A;white-space:nowrap;">{label}</th>'
+            )
 
-    # ── Build rows ───────────────────────────────────────────────────────
+    # ── Rows: row i = the i-th most recent session for EACH source, side by
+    # side. Sources with fewer sessions than max_rows just show "—". ───────
     row_html = []
-    for row in sessions:
-        cells = [f'<td style="white-space:nowrap;">{row["date_label"]}</td>']
-        color = VIEW_DATA_SOURCE_COLORS.get(row["source"], "#888")
-        cells.append(
-            f'<td><span style="background:{color}22;color:{color};padding:2px 8px;'
-            f'border-radius:5px;font-size:11px;font-weight:600;">{row["source"]}</span></td>'
-        )
-        for src, label, invert, fmt in VIEW_DATA_METRICS:
-            if src != row["source"] or label not in row["metrics"]:
-                cells.append('<td style="color:#3a4a5c;text-align:center;">—</td>')
+    for i in range(max_rows):
+        cells = [f'<td style="text-align:center;color:#5A7A9A;">{i + 1}</td>']
+        for src in sources_in_order:
+            metrics = [m for m in VIEW_DATA_METRICS if m[0] == src]
+            color = VIEW_DATA_SOURCE_COLORS[src]
+            rows = by_source.get(src, [])
+            if i >= len(rows):
+                cells.append(f'<td style="border-left:2px solid {color}44;color:#3a4a5c;'
+                             f'text-align:center;white-space:nowrap;">—</td>')
+                for _ in metrics:
+                    cells.append('<td style="color:#3a4a5c;text-align:center;">—</td>')
                 continue
-            val = row["metrics"][label]
-            try:
-                val_str = fmt.format(val)
-            except Exception:
-                val_str = str(val)
-            chip = row.get("_chips", {}).get(label, "")
-            cells.append(f'<td style="white-space:nowrap;">{val_str}{chip}</td>')
+            row = rows[i]
+            cells.append(f'<td style="border-left:2px solid {color}44;white-space:nowrap;">'
+                         f'{row["date_label"]}</td>')
+            for _, label, _, fmt in metrics:
+                val = row["metrics"].get(label)
+                if val is None:
+                    cells.append('<td style="color:#3a4a5c;text-align:center;">—</td>')
+                    continue
+                try:
+                    val_str = fmt.format(val)
+                except Exception:
+                    val_str = str(val)
+                chip = row.get("_chips", {}).get(label, "")
+                cells.append(f'<td style="white-space:nowrap;">{val_str}{chip}</td>')
         row_html.append(f"<tr>{''.join(cells)}</tr>")
 
     table_html = f"""
@@ -231,7 +255,7 @@ def _render_view_data_table(athlete_name: str, uid: str):
     <table style="border-collapse:collapse;width:100%;font-size:12.5px;font-family:sans-serif;">
       <thead>
         <tr>{''.join(group_header_cells)}</tr>
-        <tr>{metric_header_cells}</tr>
+        <tr>{''.join(sub_header_cells)}</tr>
       </thead>
       <tbody>
         {''.join(row_html)}
@@ -239,9 +263,10 @@ def _render_view_data_table(athlete_name: str, uid: str):
     </table>
     </div>
     <p style="font-size:11px;color:#5A7A9A;margin-top:6px;">
-      Each row is one real session from one data source (sessions across sources don't share dates).
-      Arrows compare a metric to that same metric's previous session from the same source.
-      Green = improvement, red = regression. "—" means no data from that source on this session.
+      Row 1 = each source's most recent session, row 2 = each source's second-most-recent, etc.
+      — sessions across sources rarely share a date, so each source has its own Date column.
+      Arrows compare a metric to that same source's previous session. Green = improvement, red = regression.
+      "—" means that source doesn't have that many sessions on record.
     </p>
     """
     st.markdown(table_html, unsafe_allow_html=True)

@@ -1957,12 +1957,14 @@ SESSION_HISTORY_METRICS = [
 
 def get_athlete_session_history(athlete_name: str, limit_per_source: int = 15) -> dict:
     """
-    Return every individual session for an athlete across all data sources as
-    one flat, chronologically-sorted (most-recent-first) list — one row per
-    real session/test event, tagged with its source. Unlike load_athlete_data()
-    (which is capped to MAX_SESSIONS and shapes data for the PDF report), this
-    pulls more history and keeps each source's session as its own row, since
-    session dates don't line up across sources.
+    Return each data source's session history as its OWN list, already
+    sorted most-recent-first (straight from SQL — no cross-source merging).
+
+    This powers a table where row N shows the Nth-most-recent session from
+    EACH source side by side (aligned by recency rank, not by calendar date,
+    since sessions from different sources essentially never land on the same
+    day — row 1 = each source's latest session, row 2 = each source's
+    second-latest, etc.). Each source keeps its own date column.
 
     Powers the "View Data" screen in the Athletes tab.
     """
@@ -1983,7 +1985,8 @@ def get_athlete_session_history(athlete_name: str, limit_per_source: int = 15) -
         raise ValueError(f"Athlete not found: {athlete_name}")
     uid = athlete["master_uid"]
 
-    sessions = []
+    def _row(date_val, metrics):
+        return {"date_label": _fmt_full_date(date_val), "date_iso": str(date_val), "metrics": metrics}
 
     # ── Dari ──────────────────────────────────────────────────────────────
     cur.execute("""
@@ -1995,20 +1998,18 @@ def get_athlete_session_history(athlete_name: str, limit_per_source: int = 15) -
           AND score_overall IS NOT NULL
         ORDER BY session_ts DESC LIMIT %s
     """, (uid, limit_per_source))
-    for r in cur.fetchall():
-        sessions.append({
-            "date":   r["session_ts"],
-            "source": "Dari",
-            "metrics": {
-                "Overall Score":  _safe_float(r["score_overall"]),
-                "Athleticism":    _safe_float(r["score_vulnerability"]),
-                "Functionality":  _safe_float(r["score_function"]),
-                "Explosiveness":  _safe_float(r["score_explosive"]),
-                "Dysfunction":    _safe_float(r["score_dysfunction"]),
-            },
+    dari_list = [
+        _row(r["session_ts"], {
+            "Overall Score":  _safe_float(r["score_overall"]),
+            "Athleticism":    _safe_float(r["score_vulnerability"]),
+            "Functionality":  _safe_float(r["score_function"]),
+            "Explosiveness":  _safe_float(r["score_explosive"]),
+            "Dysfunction":    _safe_float(r["score_dysfunction"]),
         })
+        for r in cur.fetchall()
+    ]
 
-    # ── Vald (CMJ — same test type used in the report) ──────────────────────
+    # ── Vald CMJ ──────────────────────────────────────────────────────────
     cur.execute("""
         SELECT test_date, jump_height_flight_in, peak_power_w, rsi_modified
         FROM vald_performance
@@ -2019,16 +2020,58 @@ def get_athlete_session_history(athlete_name: str, limit_per_source: int = 15) -
           AND peak_power_w IS NOT NULL
         ORDER BY test_date DESC LIMIT %s
     """, (uid, limit_per_source))
-    for r in cur.fetchall():
-        sessions.append({
-            "date":   r["test_date"],
-            "source": "Vald",
-            "metrics": {
-                "Jump Height":  round(_safe_float(r["jump_height_flight_in"]), 2),
-                "Peak Power":   round(_safe_float(r["peak_power_w"]), 0),
-                "RSI-Modified": round(_safe_float(r["rsi_modified"]), 3),
-            },
+    cmj_list = [
+        _row(r["test_date"], {
+            "Jump Height":  round(_safe_float(r["jump_height_flight_in"]), 2),
+            "Peak Power":   round(_safe_float(r["peak_power_w"]), 0),
+            "RSI-Modified": round(_safe_float(r["rsi_modified"]), 3)
+                            if r.get("rsi_modified") is not None else None,
         })
+        for r in cur.fetchall()
+    ]
+
+    # ── Vald ABCMJ (Abalakov CMJ — same table as CMJ, different test_type) ───
+    cur.execute("""
+        SELECT test_date, jump_height_flight_in, peak_power_w, rsi_modified
+        FROM vald_performance
+        WHERE master_uid = %s
+          AND test_type = 'ABCMJ'
+          AND test_date IS NOT NULL
+          AND jump_height_flight_in IS NOT NULL
+          AND peak_power_w IS NOT NULL
+        ORDER BY test_date DESC LIMIT %s
+    """, (uid, limit_per_source))
+    abcmj_list = [
+        _row(r["test_date"], {
+            "Jump Height":  round(_safe_float(r["jump_height_flight_in"]), 2),
+            "Peak Power":   round(_safe_float(r["peak_power_w"]), 0),
+            "RSI-Modified": round(_safe_float(r["rsi_modified"]), 3)
+                            if r.get("rsi_modified") is not None else None,
+        })
+        for r in cur.fetchall()
+    ]
+
+    # ── Vald SLJ (Single Leg Jump — separate table) ──────────────────────────
+    cur.execute("""
+        SELECT exam_date, exam_time, peak_force_l, peak_force_r,
+               jump_height_flight_l, jump_height_flight_r
+        FROM vald_slj
+        WHERE master_uid = %s
+          AND peak_force_l IS NOT NULL
+          AND peak_force_r IS NOT NULL
+        ORDER BY exam_date DESC, exam_time DESC LIMIT %s
+    """, (uid, limit_per_source))
+    slj_list = [
+        _row(r["exam_date"], {
+            "Peak Force L":  round(_safe_float(r["peak_force_l"]), 0),
+            "Peak Force R":  round(_safe_float(r["peak_force_r"]), 0),
+            "Jump Height L": round(_safe_float(r["jump_height_flight_l"]), 2)
+                             if r.get("jump_height_flight_l") is not None else None,
+            "Jump Height R": round(_safe_float(r["jump_height_flight_r"]), 2)
+                             if r.get("jump_height_flight_r") is not None else None,
+        })
+        for r in cur.fetchall()
+    ]
 
     # ── ArmCare ───────────────────────────────────────────────────────────
     cur.execute("""
@@ -2040,17 +2083,15 @@ def get_athlete_session_history(athlete_name: str, limit_per_source: int = 15) -
           AND total_strength IS NOT NULL
         ORDER BY exam_date DESC LIMIT %s
     """, (uid, limit_per_source))
-    for r in cur.fetchall():
-        sessions.append({
-            "date":   r["exam_date"],
-            "source": "ArmCare",
-            "metrics": {
-                "Arm Score":      round(_safe_float(r["arm_score"]), 1),
-                "Total Strength": round(_safe_float(r["total_strength"]), 1),
-                "SVR":            round(_safe_float(r["svr"]), 2),
-                "Balance":        round(_safe_float(r["shoulder_balance"]), 2),
-            },
+    armcare_list = [
+        _row(r["exam_date"], {
+            "Arm Score":      round(_safe_float(r["arm_score"]), 1),
+            "Total Strength": round(_safe_float(r["total_strength"]), 1),
+            "SVR":            round(_safe_float(r["svr"]), 2),
+            "Balance":        round(_safe_float(r["shoulder_balance"]), 2),
         })
+        for r in cur.fetchall()
+    ]
 
     # ── InBody ────────────────────────────────────────────────────────────
     cur.execute("""
@@ -2059,50 +2100,32 @@ def get_athlete_session_history(athlete_name: str, limit_per_source: int = 15) -
         WHERE master_uid = %s AND test_date IS NOT NULL
         ORDER BY test_date DESC LIMIT %s
     """, (uid, limit_per_source))
-    for r in cur.fetchall():
-        sessions.append({
-            "date":   r["test_date"],
-            "source": "InBody",
-            "metrics": {
-                "InBody Score": _safe_float(r["inbody_score"]),
-                "Weight":       round(_safe_float(r["weight"]), 1),
-                "Body Fat %":   round(_safe_float(r["pbf"]), 1),
-                "SMM":          round(_safe_float(r["smm"]), 1),
-                "BMR":          round(_safe_float(r["bmr"]), 0),
-                "Phase Angle":  round(_safe_float(r["phase_angle_50khz"]), 1),
-            },
+    inbody_list = [
+        _row(r["test_date"], {
+            "InBody Score": _safe_float(r["inbody_score"]),
+            "Weight":       round(_safe_float(r["weight"]), 1),
+            "Body Fat %":   round(_safe_float(r["pbf"]), 1),
+            "SMM":          round(_safe_float(r["smm"]), 1),
+            "BMR":          round(_safe_float(r["bmr"]), 0),
+            "Phase Angle":  round(_safe_float(r["phase_angle_50khz"]), 1),
         })
+        for r in cur.fetchall()
+    ]
 
     cur.close()
     conn.close()
 
-    # Normalize sort key: some sources store a plain date (exam_date/test_date)
-    # and others a timestamp (dari_motion.session_ts appears to be stored as
-    # timestamptz in Postgres, so psycopg2 returns it timezone-aware). Python
-    # can't compare datetime.datetime to datetime.date, nor compare
-    # timezone-aware to timezone-naive datetimes — so coerce everything to a
-    # naive datetime before sorting.
-    def _sort_key(d):
-        if isinstance(d, datetime.date) and not isinstance(d, datetime.datetime):
-            d = datetime.datetime.combine(d, datetime.time.min)
-        elif not isinstance(d, datetime.datetime):
-            d = pd.to_datetime(d)
-        if isinstance(d, datetime.datetime) and d.tzinfo is not None:
-            d = d.replace(tzinfo=None)
-        return d
-
-    # Most recent first
-    sessions.sort(key=lambda s: _sort_key(s["date"]), reverse=True)
-
-    for s in sessions:
-        s["date_label"] = _fmt_full_date(s["date"])
-        s["date_iso"]   = str(s["date"])
-        del s["date"]  # not JSON-serializable as-is; iso/label cover display needs
-
     return {
         "athlete_name": athlete["full_name"],
         "master_uid":   uid,
-        "sessions":     sessions,
+        "by_source": {
+            "Dari":         dari_list,
+            "Vald CMJ":     cmj_list,
+            "Vald ABCMJ":   abcmj_list,
+            "Vald SLJ":     slj_list,
+            "ArmCare":      armcare_list,
+            "InBody":       inbody_list,
+        },
     }
 
 
