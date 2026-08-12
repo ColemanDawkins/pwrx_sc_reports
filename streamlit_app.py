@@ -110,6 +110,7 @@ VIEW_DATA_METRICS = [
     ("InBody",      "SMM",             False, "{:.1f} lbs"),
     ("InBody",      "BMR",             False, "{:.0f} kcal"),
     ("InBody",      "Phase Angle",     False, "{:.1f}"),
+    ("Max Velo",    "Max Velo",        False, "{:.1f} mph"),
 ]
 
 VIEW_DATA_SOURCE_COLORS = {
@@ -120,6 +121,7 @@ VIEW_DATA_SOURCE_COLORS = {
     "Vald Hop":   "#F59E0B",
     "ArmCare":    "#EF4444",
     "InBody":     "#2563EB",
+    "Max Velo":   "#9333EA",
 }
 
 
@@ -145,8 +147,12 @@ def _view_data_chip(current, previous, invert=False):
             f'{arrow} {abs(pct):.1f}%</span>')
 
 
-def _render_view_data_table(athlete_name: str, uid: str):
-    """Fetch and render the combined cross-source session history table."""
+def _fetch_view_data_payload(athlete_name: str):
+    """
+    Fetch the combined cross-source session history for one athlete.
+    Returns (payload, error_message) — exactly one will be None.
+    Shared by the on-screen table and the CSV export so both always match.
+    """
     try:
         resp = requests.get(
             API_URL + "/athletes/session_history",
@@ -154,8 +160,7 @@ def _render_view_data_table(athlete_name: str, uid: str):
             timeout=15,
         )
     except Exception as e:
-        st.error(f"Request failed: {e}")
-        return
+        return None, f"Request failed: {e}"
 
     if resp.status_code != 200:
         # Surface the real reason instead of a generic message — this is almost
@@ -165,19 +170,21 @@ def _render_view_data_table(athlete_name: str, uid: str):
             detail = resp.json().get("error", resp.text)
         except Exception:
             detail = resp.text
-        st.error(f"Could not load session data (HTTP {resp.status_code}): {detail}")
-        return
+        return None, f"Could not load session data (HTTP {resp.status_code}): {detail}"
 
     try:
         payload = resp.json()
     except Exception as e:
-        st.error(f"Server returned an unreadable response: {e}")
-        return
+        return None, f"Server returned an unreadable response: {e}"
 
     if not payload:
-        st.error("Could not load session data for this athlete.")
-        return
+        return None, "Could not load session data for this athlete."
 
+    return payload, None
+
+
+def _render_view_data_table(payload: dict):
+    """Render the combined cross-source session history table from an already-fetched payload."""
     by_source = payload.get("by_source", {})
     sources_in_order = []
     for src, _, _, _ in VIEW_DATA_METRICS:
@@ -275,6 +282,48 @@ def _render_view_data_table(athlete_name: str, uid: str):
     </p>
     """
     st.markdown(table_html, unsafe_allow_html=True)
+
+
+def _build_view_data_csv(payload: dict) -> str:
+    """
+    Flatten the same by_source session history shown on screen into a CSV —
+    one row per recency-rank, one column per (source, metric), so the export
+    matches the table exactly.
+    """
+    by_source = payload.get("by_source", {})
+    sources_in_order = []
+    for src, _, _, _ in VIEW_DATA_METRICS:
+        if src not in sources_in_order:
+            sources_in_order.append(src)
+
+    max_rows = max((len(by_source.get(src, [])) for src in sources_in_order), default=0)
+
+    columns = ["Rank"]
+    for src in sources_in_order:
+        metrics = [m for m in VIEW_DATA_METRICS if m[0] == src]
+        columns.append(f"{src} Date")
+        for _, label, _, _ in metrics:
+            columns.append(f"{src} {label}")
+
+    records = []
+    for i in range(max_rows):
+        record = {"Rank": i + 1}
+        for src in sources_in_order:
+            metrics = [m for m in VIEW_DATA_METRICS if m[0] == src]
+            rows = by_source.get(src, [])
+            if i < len(rows):
+                row = rows[i]
+                record[f"{src} Date"] = row.get("date_label", "")
+                for _, label, _, _ in metrics:
+                    record[f"{src} {label}"] = row["metrics"].get(label, "")
+            else:
+                record[f"{src} Date"] = ""
+                for _, label, _, _ in metrics:
+                    record[f"{src} {label}"] = ""
+        records.append(record)
+
+    df = pd.DataFrame(records, columns=columns)
+    return df.to_csv(index=False)
 
 
 # ── TAB 1: Generate Report ────────────────────────────────────────────────────
@@ -829,19 +878,84 @@ with tab4:
                     c2.markdown(f"**InBody / Phone:** `{athlete.get('inbody_uid') or '—'}`")
                     c3.markdown(f"**PP Phone on file:** `{athlete.get('pushpress_phone') or '—'}`")
 
-                    # ── View Data: combined cross-source session history ────
+                    # ── View Data / Download CSV / Enter Velo ────────────────
                     view_key = f"view_data_open_{uid}"
+                    csv_key  = f"view_data_csv_{uid}"
+                    velo_key = f"velo_open_{uid}"
                     if view_key not in st.session_state:
                         st.session_state[view_key] = False
+                    if velo_key not in st.session_state:
+                        st.session_state[velo_key] = False
 
-                    if st.button(
-                        "🔽 Hide Data" if st.session_state[view_key] else "📊 View Data",
-                        key=f"viewdata_btn_{uid}",
-                    ):
-                        st.session_state[view_key] = not st.session_state[view_key]
+                    vd_col1, vd_col2, vd_col3 = st.columns([1, 1, 1])
+                    with vd_col1:
+                        if st.button(
+                            "🔽 Hide Data" if st.session_state[view_key] else "📊 View Data",
+                            key=f"viewdata_btn_{uid}",
+                        ):
+                            st.session_state[view_key] = not st.session_state[view_key]
+                    with vd_col2:
+                        if st.button("📥 Download CSV", key=f"csvbtn_{uid}"):
+                            payload, err = _fetch_view_data_payload(athlete["full_name"])
+                            if err:
+                                st.error(err)
+                                st.session_state.pop(csv_key, None)
+                            else:
+                                st.session_state[csv_key] = _build_view_data_csv(payload)
+                    with vd_col3:
+                        if st.button(
+                            "🔽 Hide Velo Entry" if st.session_state[velo_key] else "🎯 Enter Velo",
+                            key=f"velobtn_{uid}",
+                        ):
+                            st.session_state[velo_key] = not st.session_state[velo_key]
+
+                    if st.session_state[velo_key]:
+                        with st.form(key=f"velo_form_{uid}"):
+                            velo_date = st.date_input("Date", value=dt.date.today(), key=f"velo_date_{uid}")
+                            velo_mph  = st.number_input(
+                                "Max Velocity (mph)", min_value=0.0, max_value=120.0,
+                                step=0.1, format="%.1f", key=f"velo_mph_{uid}",
+                            )
+                            submitted = st.form_submit_button("Save Velo")
+                            if submitted:
+                                try:
+                                    resp = requests.post(
+                                        API_URL + "/athletes/max_velo",
+                                        json={
+                                            "master_uid": uid,
+                                            "full_name":  athlete["full_name"],
+                                            "exam_date":  velo_date.isoformat(),
+                                            "velo_mph":   float(velo_mph),
+                                        },
+                                        timeout=15,
+                                    )
+                                    if resp.status_code == 200:
+                                        st.success(f"Saved {velo_mph:.1f} mph for {velo_date.strftime('%b %d, %Y')}.")
+                                    else:
+                                        try:
+                                            detail = resp.json().get("error", resp.text)
+                                        except Exception:
+                                            detail = resp.text
+                                        st.error(f"Could not save (HTTP {resp.status_code}): {detail}")
+                                except Exception as e:
+                                    st.error(f"Request failed: {e}")
 
                     if st.session_state[view_key]:
-                        _render_view_data_table(athlete["full_name"], uid)
+                        payload, err = _fetch_view_data_payload(athlete["full_name"])
+                        if err:
+                            st.error(err)
+                        else:
+                            _render_view_data_table(payload)
+
+                    if csv_key in st.session_state:
+                        safe_name = athlete["full_name"].replace(" ", "_")
+                        st.download_button(
+                            "Save CSV file",
+                            data=st.session_state[csv_key],
+                            file_name=f"{safe_name}_session_history.csv",
+                            mime="text/csv",
+                            key=f"dlfinal_{uid}",
+                        )
 
                     st.divider()
                     st.markdown("##### Edit IDs")

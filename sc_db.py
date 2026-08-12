@@ -568,6 +568,28 @@ ALTER TABLE vald_performance ADD COLUMN IF NOT EXISTS full_name TEXT;
 ALTER TABLE vald_slj         ADD COLUMN IF NOT EXISTS full_name TEXT;
 ALTER TABLE vald_hop         ADD COLUMN IF NOT EXISTS full_name TEXT;
 ALTER TABLE inbody           ADD COLUMN IF NOT EXISTS full_name TEXT;
+
+-- ── Manually-entered Max Velocity readings ─────────────────────────────────
+-- One row per athlete per day (coach enters a single MPH reading via the
+-- "Enter Velo" button in Athlete Search). Re-entering the same date
+-- overwrites the previous value rather than creating a duplicate.
+CREATE TABLE IF NOT EXISTS max_velo (
+    id          SERIAL PRIMARY KEY,
+    master_uid  TEXT REFERENCES master_uid(master_uid) ON DELETE SET NULL,
+    full_name   TEXT,
+    exam_date   DATE NOT NULL,
+    velo_mph    NUMERIC NOT NULL,
+    uploaded_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_max_velo_master ON max_velo(master_uid);
+CREATE INDEX IF NOT EXISTS idx_max_velo_date   ON max_velo(exam_date);
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'max_velo_unique_day') THEN
+    ALTER TABLE max_velo ADD CONSTRAINT max_velo_unique_day UNIQUE (master_uid, exam_date);
+  END IF;
+END $$;
 """
 
 
@@ -2190,6 +2212,20 @@ def get_athlete_session_history(athlete_name: str, limit_per_source: int = 15) -
         for r in cur.fetchall()
     ]
 
+    # ── Max Velo (manually entered) ─────────────────────────────────────────
+    cur.execute("""
+        SELECT exam_date, velo_mph
+        FROM max_velo
+        WHERE master_uid = %s AND exam_date IS NOT NULL
+        ORDER BY exam_date DESC LIMIT %s
+    """, (uid, limit_per_source))
+    max_velo_list = [
+        _row(r["exam_date"], {
+            "Max Velo": round(_safe_float(r["velo_mph"]), 1),
+        })
+        for r in cur.fetchall()
+    ]
+
     cur.close()
     conn.close()
 
@@ -2204,6 +2240,7 @@ def get_athlete_session_history(athlete_name: str, limit_per_source: int = 15) -
             "Vald Hop":     hop_list,
             "ArmCare":      armcare_list,
             "InBody":       inbody_list,
+            "Max Velo":     max_velo_list,
         },
     }
 
@@ -2713,6 +2750,39 @@ def ingest_vald_hop(path: str) -> dict:
         "inserted":  inserted,
         "skipped":   skipped,
         "unmatched": list(set(unmatched)),
+    }
+
+
+def save_max_velo(master_uid: str, full_name: str, exam_date: str, velo_mph: float) -> dict:
+    """
+    Save (upsert) a manually-entered Max Velocity reading for one athlete on
+    one date — one reading per athlete per day. Re-submitting the same date
+    overwrites the previous value rather than creating a duplicate.
+
+    Powers the "Enter Velo" button in the Athletes tab.
+    """
+    conn = get_conn()
+    cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    cur.execute("""
+        INSERT INTO max_velo (master_uid, full_name, exam_date, velo_mph)
+        VALUES (%s, %s, %s, %s)
+        ON CONFLICT (master_uid, exam_date)
+        DO UPDATE SET velo_mph = EXCLUDED.velo_mph, full_name = EXCLUDED.full_name
+        RETURNING id, master_uid, full_name, exam_date, velo_mph
+    """, (master_uid, full_name, exam_date, velo_mph))
+
+    row = cur.fetchone()
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    return {
+        "id":         row["id"],
+        "master_uid": row["master_uid"],
+        "full_name":  row["full_name"],
+        "exam_date":  str(row["exam_date"]),
+        "velo_mph":   float(row["velo_mph"]),
     }
 
 

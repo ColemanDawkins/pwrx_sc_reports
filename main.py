@@ -363,6 +363,13 @@ class UpdateAthleteIdsRequest(BaseModel):
     pp_phone:     Optional[str] = None
 
 
+class MaxVeloRequest(BaseModel):
+    master_uid: str
+    full_name:  str
+    exam_date:  str    # "YYYY-MM-DD"
+    velo_mph:   float
+
+
 @app.patch("/athletes/{master_uid}/inbody_uid")
 def set_athlete_inbody_uid(master_uid: str, req: SetInbodyUidRequest):
     """Set or update the inbody_uid (phone number) for an athlete."""
@@ -394,6 +401,20 @@ def athlete_update_ids(req: UpdateAthleteIdsRequest):
             pp_phone=req.pp_phone,
         )
         return {"status": "ok", "updated": updated}
+    except Exception as exc:
+        traceback.print_exc()
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.post("/athletes/max_velo")
+def athlete_save_max_velo(req: MaxVeloRequest):
+    """Save (upsert) a manually-entered Max Velocity reading for one athlete/date."""
+    try:
+        from sc_db import save_max_velo
+        result = save_max_velo(req.master_uid, req.full_name, req.exam_date, req.velo_mph)
+        return {"status": "ok", **result}
     except Exception as exc:
         traceback.print_exc()
         return JSONResponse({"error": str(exc)}, status_code=500)
