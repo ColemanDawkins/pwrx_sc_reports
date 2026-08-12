@@ -878,31 +878,19 @@ with tab4:
                     c2.markdown(f"**InBody / Phone:** `{athlete.get('inbody_uid') or '—'}`")
                     c3.markdown(f"**PP Phone on file:** `{athlete.get('pushpress_phone') or '—'}`")
 
-                    # ── View Data / Download CSV / Enter Velo ────────────────
+                    # ── View Data / Enter Velo ───────────────────────────────
                     view_key = f"view_data_open_{uid}"
-                    csv_key  = f"view_data_csv_{uid}"
                     velo_key = f"velo_open_{uid}"
                     if view_key not in st.session_state:
                         st.session_state[view_key] = False
                     if velo_key not in st.session_state:
                         st.session_state[velo_key] = False
 
-                    vd_col1, vd_col2, vd_col3 = st.columns([1, 1, 1])
+                    vd_col1, vd_col2 = st.columns([1, 1])
                     with vd_col1:
-                        if st.button(
-                            "🔽 Hide Data" if st.session_state[view_key] else "📊 View Data",
-                            key=f"viewdata_btn_{uid}",
-                        ):
+                        if st.button("📊 View Data", key=f"viewdata_btn_{uid}"):
                             st.session_state[view_key] = not st.session_state[view_key]
                     with vd_col2:
-                        if st.button("📥 Download CSV", key=f"csvbtn_{uid}"):
-                            payload, err = _fetch_view_data_payload(athlete["full_name"])
-                            if err:
-                                st.error(err)
-                                st.session_state.pop(csv_key, None)
-                            else:
-                                st.session_state[csv_key] = _build_view_data_csv(payload)
-                    with vd_col3:
                         if st.button(
                             "🔽 Hide Velo Entry" if st.session_state[velo_key] else "🎯 Enter Velo",
                             key=f"velobtn_{uid}",
@@ -946,16 +934,14 @@ with tab4:
                             st.error(err)
                         else:
                             _render_view_data_table(payload)
-
-                    if csv_key in st.session_state:
-                        safe_name = athlete["full_name"].replace(" ", "_")
-                        st.download_button(
-                            "Save CSV file",
-                            data=st.session_state[csv_key],
-                            file_name=f"{safe_name}_session_history.csv",
-                            mime="text/csv",
-                            key=f"dlfinal_{uid}",
-                        )
+                            safe_name = athlete["full_name"].replace(" ", "_")
+                            st.download_button(
+                                "Save CSV file",
+                                data=_build_view_data_csv(payload),
+                                file_name=f"{safe_name}_session_history.csv",
+                                mime="text/csv",
+                                key=f"dlfinal_{uid}",
+                            )
 
                     st.divider()
                     st.markdown("##### Edit IDs")
