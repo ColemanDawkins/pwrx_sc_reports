@@ -279,6 +279,12 @@ CREATE TABLE IF NOT EXISTS vald_performance (
     eccentric_peak_power_per_bm     NUMERIC,
     concentric_peak_force_asym      TEXT,
     bodyweight_lbs                  NUMERIC,
+    concentric_peak_force_n         NUMERIC,
+    positive_impulse_ns             NUMERIC,
+    p2_concentric_impulse_ns        NUMERIC,
+    eccentric_braking_rfd           NUMERIC,
+    countermovement_depth_cm        NUMERIC,
+    eccentric_braking_impulse_ns    NUMERIC,
     uploaded_at                     TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -492,9 +498,22 @@ DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'armcare_unique_session') THEN
     ALTER TABLE armcare ADD CONSTRAINT armcare_unique_session UNIQUE (master_uid, exam_date);
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'vald_unique_session') THEN
-    ALTER TABLE vald_performance ADD CONSTRAINT vald_unique_session UNIQUE (athlete_name, test_date);
+
+  -- Vald: originally UNIQUE (athlete_name, test_date) only — this incorrectly
+  -- treated different test types (e.g. CMJ vs ABCMJ) performed on the same
+  -- day as the same session, so the second upload violated the constraint
+  -- and was silently skipped by ingest_file()'s broad exception handler.
+  -- Widened to include test_type/test_time so same-day different test types
+  -- (or repeat trials at different times) are correctly treated as distinct,
+  -- while a true re-upload of the exact same test still updates in place.
+  -- Unconditional drop+recreate (not IF NOT EXISTS) so this actually widens
+  -- the constraint on databases where the narrow version already exists.
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'vald_unique_session') THEN
+    ALTER TABLE vald_performance DROP CONSTRAINT vald_unique_session;
   END IF;
+  ALTER TABLE vald_performance ADD CONSTRAINT vald_unique_session
+    UNIQUE (athlete_name, test_date, test_type, test_time);
+
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'inbody_unique_session') THEN
     ALTER TABLE inbody ADD CONSTRAINT inbody_unique_session UNIQUE (master_uid, test_date);
   END IF;
@@ -568,6 +587,16 @@ ALTER TABLE vald_performance ADD COLUMN IF NOT EXISTS full_name TEXT;
 ALTER TABLE vald_slj         ADD COLUMN IF NOT EXISTS full_name TEXT;
 ALTER TABLE vald_hop         ADD COLUMN IF NOT EXISTS full_name TEXT;
 ALTER TABLE inbody           ADD COLUMN IF NOT EXISTS full_name TEXT;
+
+-- ── New CMJ/ABCMJ metrics from the updated Force Decks export template ────
+-- (Concentric Peak Force, Positive Impulse, P2 Concentric Impulse,
+-- Eccentric Braking RFD, Countermovement Depth, Eccentric Braking Impulse)
+ALTER TABLE vald_performance ADD COLUMN IF NOT EXISTS concentric_peak_force_n      NUMERIC;
+ALTER TABLE vald_performance ADD COLUMN IF NOT EXISTS positive_impulse_ns          NUMERIC;
+ALTER TABLE vald_performance ADD COLUMN IF NOT EXISTS p2_concentric_impulse_ns     NUMERIC;
+ALTER TABLE vald_performance ADD COLUMN IF NOT EXISTS eccentric_braking_rfd        NUMERIC;
+ALTER TABLE vald_performance ADD COLUMN IF NOT EXISTS countermovement_depth_cm     NUMERIC;
+ALTER TABLE vald_performance ADD COLUMN IF NOT EXISTS eccentric_braking_impulse_ns NUMERIC;
 
 -- ── Manually-entered Max Velocity readings ─────────────────────────────────
 -- One row per athlete per day (coach enters a single MPH reading via the
@@ -985,6 +1014,14 @@ COLUMN_ALIASES = {
     "eccentric_peak_power_per_bm":["Eccentric Peak Power / BM [W/kg] ", "eccentric_peak_power_per_bm"],
     "concentric_peak_force_asym":["Concentric Peak Force % (Asym) (%)", "concentric_peak_force_asym"],
     "bodyweight_lbs":           ["Bodyweight in Pounds [lbs] ", "bodyweight_lbs"],
+
+    # New fields from the updated Force Decks CMJ/ABCMJ export template
+    "concentric_peak_force_n":      ["Concentric Peak Force [N] ", "concentric_peak_force_n"],
+    "positive_impulse_ns":          ["Positive Impulse [N s] ", "positive_impulse_ns"],
+    "p2_concentric_impulse_ns":     ["P2 Concentric Impulse [N s] ", "p2_concentric_impulse_ns"],
+    "eccentric_braking_rfd":        ["Eccentric Braking RFD [N/s] ", "eccentric_braking_rfd"],
+    "countermovement_depth_cm":     ["Countermovement Depth [cm] ", "countermovement_depth_cm"],
+    "eccentric_braking_impulse_ns": ["Eccentric Braking Impulse [N s] ", "eccentric_braking_impulse_ns"],
 }
 
 # Which column is the unique key per table (used for ON CONFLICT)
@@ -995,6 +1032,15 @@ TABLE_UNIQUE_KEY = {
     "armcare":          None,
     "vald_performance": None,
     "inbody":           None,
+}
+
+# For tables whose uniqueness is a composite (multi-column) DB constraint
+# rather than a single column, reference the constraint by name instead —
+# ON CONFLICT ON CONSTRAINT works for any constraint shape. vald_performance's
+# real constraint is (athlete_name, test_date, test_type, test_time); it
+# can't be expressed as a single TABLE_UNIQUE_KEY column.
+TABLE_UNIQUE_CONSTRAINT = {
+    "vald_performance": "vald_unique_session",
 }
 
 # Columns to insert per table (in order)
@@ -1099,6 +1145,8 @@ TABLE_COLUMNS = {
         "concentric_mean_force_asym", "eccentric_mean_force_asym",
         "jump_height_imp_mom_in", "eccentric_peak_power_per_bm",
         "concentric_peak_force_asym", "bodyweight_lbs",
+        "concentric_peak_force_n", "positive_impulse_ns", "p2_concentric_impulse_ns",
+        "eccentric_braking_rfd", "countermovement_depth_cm", "eccentric_braking_impulse_ns",
         "full_name",
     ],
     "inbody": [
@@ -1407,7 +1455,8 @@ def ingest_file(path: str, table: str, verbose: bool = True) -> dict:
         df = _link_master_uid(df, table, conn)
 
     inserted = skipped = flagged = 0
-    unique_key = TABLE_UNIQUE_KEY.get(table)
+    unique_key        = TABLE_UNIQUE_KEY.get(table)
+    unique_constraint = TABLE_UNIQUE_CONSTRAINT.get(table)
     cur = conn.cursor()
 
     for _, row in df.iterrows():
@@ -1421,7 +1470,17 @@ def ingest_file(path: str, table: str, verbose: bool = True) -> dict:
             placeholders = ", ".join(["%s"] * len(cols))
             col_list = ", ".join(cols)
 
-            if unique_key and unique_key in cols:
+            if unique_constraint:
+                # Composite/multi-column uniqueness — reference the DB
+                # constraint by name so ON CONFLICT works regardless of
+                # how many columns it spans.
+                sql = f"""
+                    INSERT INTO {table} ({col_list})
+                    VALUES ({placeholders})
+                    ON CONFLICT ON CONSTRAINT {unique_constraint} DO UPDATE
+                    SET {', '.join(f"{c}=EXCLUDED.{c}" for c in cols)}
+                """
+            elif unique_key and unique_key in cols:
                 sql = f"""
                     INSERT INTO {table} ({col_list})
                     VALUES ({placeholders})
@@ -1725,14 +1784,19 @@ def load_athlete_data(athlete_name: str) -> dict:
     dari_rows = list(reversed(cur.fetchall()))
 
     # ── Vald ────────────────────────────────────────────────────────────────
+    # jump_height_flight_in is preferred, but some exports (older templates,
+    # or ones missing that column) only have jump_height_imp_mom_in — fall
+    # back to that rather than losing the whole session. The raw columns in
+    # the DB are left untouched; this fallback only applies at query time.
     cur.execute("""
-        SELECT test_date, jump_height_flight_in, peak_power_w,
-               rsi_modified, eccentric_peak_force_n, bodyweight_lbs
+        SELECT test_date,
+               COALESCE(jump_height_flight_in, jump_height_imp_mom_in) AS jump_height_flight_in,
+               peak_power_w, rsi_modified, eccentric_peak_force_n, bodyweight_lbs
         FROM vald_performance
         WHERE master_uid = %s
           AND test_type = 'CMJ'
           AND test_date IS NOT NULL
-          AND jump_height_flight_in IS NOT NULL
+          AND COALESCE(jump_height_flight_in, jump_height_imp_mom_in) IS NOT NULL
           AND peak_power_w IS NOT NULL
         ORDER BY test_date DESC LIMIT %s
     """, (uid, MAX_SESSIONS))
@@ -1740,12 +1804,14 @@ def load_athlete_data(athlete_name: str) -> dict:
 
     # ── Vald ABCMJ (Abalakov CMJ — same table as CMJ, different test_type) ────
     cur.execute("""
-        SELECT test_date, jump_height_flight_in, peak_power_w, rsi_modified
+        SELECT test_date,
+               COALESCE(jump_height_flight_in, jump_height_imp_mom_in) AS jump_height_flight_in,
+               peak_power_w, rsi_modified
         FROM vald_performance
         WHERE master_uid = %s
           AND test_type = 'ABCMJ'
           AND test_date IS NOT NULL
-          AND jump_height_flight_in IS NOT NULL
+          AND COALESCE(jump_height_flight_in, jump_height_imp_mom_in) IS NOT NULL
           AND peak_power_w IS NOT NULL
         ORDER BY test_date DESC LIMIT %s
     """, (uid, MAX_SESSIONS))
@@ -2088,13 +2154,17 @@ def get_athlete_session_history(athlete_name: str, limit_per_source: int = 15) -
     ]
 
     # ── Vald CMJ ──────────────────────────────────────────────────────────
+    # jump_height_flight_in preferred, falls back to jump_height_imp_mom_in
+    # for exports/rows missing that column (see load_athlete_data for why).
     cur.execute("""
-        SELECT test_date, jump_height_flight_in, peak_power_w, rsi_modified
+        SELECT test_date,
+               COALESCE(jump_height_flight_in, jump_height_imp_mom_in) AS jump_height_flight_in,
+               peak_power_w, rsi_modified
         FROM vald_performance
         WHERE master_uid = %s
           AND test_type = 'CMJ'
           AND test_date IS NOT NULL
-          AND jump_height_flight_in IS NOT NULL
+          AND COALESCE(jump_height_flight_in, jump_height_imp_mom_in) IS NOT NULL
           AND peak_power_w IS NOT NULL
         ORDER BY test_date DESC LIMIT %s
     """, (uid, limit_per_source))
@@ -2110,12 +2180,14 @@ def get_athlete_session_history(athlete_name: str, limit_per_source: int = 15) -
 
     # ── Vald ABCMJ (Abalakov CMJ — same table as CMJ, different test_type) ───
     cur.execute("""
-        SELECT test_date, jump_height_flight_in, peak_power_w, rsi_modified
+        SELECT test_date,
+               COALESCE(jump_height_flight_in, jump_height_imp_mom_in) AS jump_height_flight_in,
+               peak_power_w, rsi_modified
         FROM vald_performance
         WHERE master_uid = %s
           AND test_type = 'ABCMJ'
           AND test_date IS NOT NULL
-          AND jump_height_flight_in IS NOT NULL
+          AND COALESCE(jump_height_flight_in, jump_height_imp_mom_in) IS NOT NULL
           AND peak_power_w IS NOT NULL
         ORDER BY test_date DESC LIMIT %s
     """, (uid, limit_per_source))
